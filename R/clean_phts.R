@@ -19,7 +19,7 @@ clean_phts <- function(
   status_quo <- enquo(status)
 
   # stored in private directory to prevent data leak
-  read_sas('../../data/phts_txpl_ml.sas7bdat') %>% 
+  out <- read_sas('../../data/phts_txpl_ml.sas7bdat') %>% 
     filter(TXPL_YEAR >= min_txpl_year) %>% 
     select(
       -c(
@@ -73,6 +73,12 @@ clean_phts <- function(
     ) %>% 
     select(-starts_with('outcome'))
   
+  too_many_missing <- miss_var_summary(data = out) %>% 
+    filter(pct_miss > 30) %>% 
+    pull(variable)
   
+  out[, too_many_missing] <- NULL
+  
+  out
   
 }
