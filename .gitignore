@@ -5,6 +5,10 @@
 # Session Data files
 .RData
 
+# dont push data or visualization files to the web
+data
+fig
+
 # Example code in package build process
 *-Ex.R
 

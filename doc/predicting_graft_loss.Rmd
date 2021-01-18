@@ -1,0 +1,173 @@
+---
+title: "Prediction of Mortality and Allograft Loss in Pediatric Heart Transplant Patients Using Machine Learning"
+bibliography: refs.bib
+csl: jacc.csl
+output: 
+  officedown::rdocx_document:
+    reference_docx: style_manuscript_times_new_roman.docx
+---
+
+```{r setup, include=FALSE}
+
+library(flextable)
+library(glue)
+library(table.glue)
+library(officer)
+library(patchwork)
+library(ggplot2)
+library(magrittr)
+library(dplyr, warn.conflicts = FALSE)
+library(purrr)
+library(Hmisc)
+
+knitr::opts_chunk$set(echo = FALSE)
+
+drake::loadd(
+  phts_all,
+  tbl_one,
+  tbl_partial,
+  fig_mc_cv_vals,
+  fig_mc_cv_inf
+)
+
+```
+
+# METHODS
+
+## Modeling algorithms
+
+We define the term 'modeling algorithm' as the collection of steps taken to develop a prediction model. We compared modeling algorithms based on the following characteristics: (1) number of predictors used in the model, (2) method to select the specified number of predictors, (3) method to develop a prediction model using the selected predictors. We considered seven options for the number of predictors, three options for variable selection, and four options for model development (Figure 1). All possible combinations of these options were assessed, leading to the evaluation of 84 unique modeling algorithms. 
+
+__Methods to select predictors:__
+
+We assess contribution importance, permutation importance, and stepwise importance. Contribution importance represents fractional contribution of each predictor to the model based on the total gain of this feature's splits [@friedman2001greedy]. Higher percentage means a more important predictive feature. Permutation importance measures the importance of each predictor by measuring how much the model's prediction error increases when the values of the predictor are randomly permuted [@breiman2001random]. Stepwise importance follows the traditional stepwise technique that includes or excludes variables one at a time until a stopping criteria is met [@zhang2016variable]. Though it is not a valid procedure for statistical inference, stepwise modeling algorithms can be useful for prediction [@freedman1992problem]. There is no numeric importance value for stepwise importance but a subset of the $k$ most important variables is easily obtained by using a pre-specified number of steps. 
+
+<!-- In the current analysis, each variable importance technique leveraged a specific model: contribution importance was computed using a gradient boosted decision tree ensemble, permutation importance was computed using a random forest, and stepwise importance was computed using a Cox proportional hazards model. However, the modeling method used for variable selection was independent from the modeling method used for prediction. For example, a modeling algorithm may use contribution importance (i.e., gradient boosting) to select variables and then fit a Cox proportional hazards model using the selected variables to predict risk.  -->
+
+__Methods to develop a risk prediction model:__
+
+Proportional hazards regression is a semi-parametric modeling technique that estimates a baseline hazard function and assumes predictors have a multiplicative effect on the hazard for an event of interest. Gradient boosting (hereafter referred to as boosting) develops an ensemble of weak prediction models [@friedman2001greedy]. Each learner in the ensemble attempts to correct errors from the previous learners, and the ensemble's prediction is the aggregate of its individual learners' predictions. We developed boosting models using decision trees as learners [@breiman1984classification], a technique that has been recognized in numerous settings to be state of the art for statistical prediction [@chen2016xgboost]. Random forests are also ensembles of decision trees, but in contrast to boosting, the random forest comprises de-correlated decision trees that are grown using bootstrapped replicates of the original data [@breiman1996bagging; @breiman2001random]. We applied the standard random forest algorithm for risk prediction, which grows decision tree nodes by splitting the data based on an individual variable [@ishwaran2008random]. We also applied an extension of the random forest that splits data using linear combinations of variables [@jaeger2019oblique]. Random forests grown using linear combinations of input variables are referred to as 'oblique' random forests.  
+
+<br>
+
+## Internal validation
+
+We applied Monte-Carlo cross-validation to identify the most effective modeling algorithm for developing a final prediction model and to estimate the performance of modeling algorithms when they are applied to new data [@xu2001monte]. Monte-Carlo cross-validation is an extension of split-sample testing, which splits available data into training and testing sets, then develops a model using the training set and validates the model in the testing set. Monte-Carlo cross-validation replicates this procedure, using a different split of the available data for each replicate, leading to a reduction in the variance of performance estimates for the modeling algorithms assessed [@steyerberg2001internal]. In the current analysis, we completed a total of 500 replications of split-sample testing. 
+
+<br>
+
+## Measures of model performance
+
+Model performance was evaluated based on discrimination and calibration, as recommended by published guidelines [@steyerberg2010assessing; @steyerberg2014towards]. Discrimination and calibration were measured using a time-dependent concordance (C-) statistic and modified D'Agostino-Nam test, respectively [@blanche2013estimating; @demler2015tests]. Point estimates and 95% confidence intervals (CIs) for these metrics were computed empirically using the distribution of results from Monte-Carlo cross-validation. Point estimates were the median value of a performance metric, while the 2.5^th^ and 97.5^th^ percentiles defined lower and upper bounds for 95% CIs, respectively. We did not find previously published prediction models for graft loss among pediatric patients, so we did not analyze net reclassification improvement as it requires a baseline prediction model [@pencina2008evaluating]. 
+
+<br>
+
+## Missing data
+
+Missing values were imputed after data were split into training and testing sets during each replicate of Monte-Carlo cross-validation. All information from the testing data was withheld during this process [@james2013introduction]. Specifically, missing values were imputed in both the training and testing data using the mean and mode of continuous and categorical variables, respectively, computed using the training data. While imputation to the mean is not appropriate for statistical inference, this technique has been shown to produce prediction models with Bayes consistency when missing values are non-informative [@josse2019consistency].
+
+<br>
+
+## Statistical analysis
+
+We conducted the current analysis following previously published guidelines on multivariable prediction models for individual prognosis and diagnosis [@moons2015transparent]. Characteristics of patients were calculated as mean with standard deviation or percent in the overall population and stratified by transplant year. The count and percent of missing values for each candidate predictor variable was also tabulated in the overall population and stratified by transplant year, and the proportion of missing values in these groups was compared using a chi-square test. As the total number of predictors in the current analysis exceeds the number that would be reasonable to present in a table, we only show these data for predictors that were selected in the final prediction model.  
+
+We visually assessed the discrimination and calibration of potential algorithms to develop a final prediction model as a function of the number of predictors included in the model. We applied 
+
+<!-- We leveraged visual summaries of performance to select one modeling algorithm to develop a final prediction model using all available data. For this modeling algorithm, we tabulated discrimination and calibration from Monte-Carlo cross validation in the overall population and in subgroups defined by age, diagnosis group, and sex.  -->
+
+```{r}
+r_version <- glue::glue("{version$major}.{version$minor}")
+```
+
+<br>
+
+All analyses were conducted using SAS version 9.4, R version `r r_version`, and a number of open-source R packages [@r_language; @table.glue; @drake; @tidymodels; @tidyverse]. All R code for the current analysis is publicly available at https://github.com/bcjaeger/length-of-stay. Data for the current analysis are available by request from __FILL IN__.
+
+<br>
+
+
+# RESULTS
+
+
+
+## Internal validation
+
+
+
+<br>
+
+## Model summary
+
+
+
+\newpage
+
+<!-- TABLE 1: characteristics of participants for all variables -->
+__Table 1:__ Characteristics of patients included in the current analysis.
+`r fp_par(line_spacing = 1)`
+`r tbl_one$table`
+\newpage
+
+<!-- TABLE 2: Final model; variable dependence -->
+__Table 2:__ Predicted risk for graft loss or mortality at 1 year following transplant according to the final prediction model from the current analysis.
+`r fp_par(line_spacing = 1)`
+`r tbl_partial$table`
+\newpage
+
+
+<!-- FIGURE 1: Diagrom  -->
+__Figure 1:__ Model development algorithm considered in the current analysis. 
+```{r, out.width='100%'}
+knitr::include_graphics('../fig/recipe.png')
+```
+
+<!-- FIGURE 2: C-stat  -->
+\newpage
+__Figure 2:__ Internally validated estimates of model discrimination as a function of the number of predictor variables included in the prediction model.
+`r fp_par(line_spacing = 1)`
+
+```{r, fig.width=6, fig.height=6.5, dpi=300}
+fig_mc_cv_vals$AUC
+```
+
+Each point in the figure is the median value of model performance aggregated across 500 replicates of Monte-Carlo cross validation. 
+`r fp_par(line_spacing = 1)`
+
+Discrimination was assessed at 1 year after transplant using __FILL IN__.
+`r fp_par(line_spacing = 1)`
+
+<!-- FIGURE 3: Calibration  -->
+\newpage
+__Figure 3:__ Internally validated estimates of model calibration as a function of the number of predictor variables included in the prediction model.
+`r fp_par(line_spacing = 1)`
+
+```{r, fig.width=6, fig.height=6.5, dpi=300}
+fig_mc_cv_vals$GND.pvalue
+```
+
+Model performance was defined using the p-value from a statistical test for miscalibration (REF).
+`r fp_par(line_spacing = 1)`
+
+Each point in the figure is the median value of model performance aggregated across 500 replicates of Monte-Carlo cross validation. 
+`r fp_par(line_spacing = 1)`
+
+Calibration was assessed at 1 year after transplant using __FILL IN__.
+`r fp_par(line_spacing = 1)`
+
+<!-- FIGURE 4: Inference  -->
+\newpage
+__Figure 3:__ Bayesian estimates of differences in model performance when 20 variables were selected using permutation importance.
+`r fp_par(line_spacing = 1)`
+
+```{r, fig.width=6, fig.height=6.5, dpi=300}
+fig_mc_cv_inf
+```
+
+<!-- TABLE S1: missingness of all variables -->
+\newpage
+__Table S1:__ Number (percentage) of missing values for candidate predictor variables in the overall population and stratified by transplant year.
+`r fp_par(line_spacing = 1)`
+
+\newpage
+# REFERENCES

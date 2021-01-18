@@ -11,15 +11,18 @@
 ##' @title
 
 clean_phts <- function(
-  min_txpl_year, predict_horizon,
-  time, status,
-  case = 'snake', set_to_na = '') {
+  min_txpl_year, 
+  predict_horizon,
+  time, 
+  status,
+  case = 'snake', 
+  set_to_na = '') {
   
   time_quo <- enquo(time)
   status_quo <- enquo(status)
 
   # stored in private directory to prevent data leak
-  out <- read_sas('../../data/phts_txpl_ml.sas7bdat') %>% 
+  out <- read_sas('data/phts_txpl_ml.sas7bdat') %>% 
     filter(TXPL_YEAR >= min_txpl_year) %>% 
     select(
       -c(
@@ -45,6 +48,7 @@ clean_phts <- function(
     ) %>% 
     clean_names() %>%
     mutate(
+      ID = 1:n(),
       # prevent improper names if you one-hot encode
       across(
         .cols = where(is.character), 
@@ -78,6 +82,8 @@ clean_phts <- function(
     pull(variable)
   
   out[, too_many_missing] <- NULL
+  
+  write_rds(out, 'data/phts_all.rds')
   
   out
   

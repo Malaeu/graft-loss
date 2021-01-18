@@ -2,43 +2,34 @@
 ##'
 ##' .. content for \details{} ..
 ##'
+##' @param trn 
+##' @param tst 
+##' @param return_fit 
+##' @param predict_horizon 
+##' @param n_predictors 
+##'
 ##' @title
-##' @param boots
-fit_rsf <- function(data, nvars, ...) {
-
-  fit_full <- ranger(formula = Surv(time, status) ~ ., data = boots$trn[[1]], 
-    num.trees = 100, importance = 'permutation', min.node.size = 10, 
-    replace = FALSE, splitrule = 'C')
+fit_rsf <- function(trn,
+                    vars,
+                    tst = NULL,
+                    predict_horizon = NULL) {
   
-  rdcd_variables <- c('time', 'status', get_topvars(fit_full, nvars = nvars))
-  
-  fit_rdcd_rsf <- ranger(formula = Surv(time, status) ~ ., 
-    data = boots$trn[[1]][, rdcd_variables],
-    num.trees = 500, min.node.size = 10, 
-    replace = FALSE, splitrule = 'C')
-  
-  prd_rdcd_rsf <- predict(fit_rdcd_rsf, data = boots$tst[[1]])
-  
-  
-  
-  Score(
-    object = list(1-prd_rdcd_rsf$survival[, ncol(prd_rdcd_rsf$survival), drop = T]),
-    metric = 'AUC',
-    formula = Surv(time, status) ~ 1, 
-    data = boots$tst[[1]],
-    summary = 'IPA',
-    times = 1.0026
+  model <- ranger(
+    formula = Surv(time, status) ~ .,
+    data = trn[, c('time', 'status', vars)],
+    num.trees = 1000,
+    min.node.size = 10,
+    splitrule = 'C'
   )
   
+  if(is.null(tst)) return(model)
   
+  if(is.null(predict_horizon)) stop("specify prediction horizon", call. = F)
   
+  ranger_predictrisk(model, 
+                     newdata = tst, 
+                     times = predict_horizon)
+
 }
 
 
-get_topvars <- function(fit, nvars){
-  fit$variable.importance %>% 
-    enframe() %>% 
-    arrange(desc(value)) %>% 
-    slice(1:nvars) %>% 
-    pull(name)
-}
