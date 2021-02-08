@@ -32,7 +32,8 @@ the_plan <- drake_plan(
   
   final_features = make_final_features(phts_all),
   
-  final_data = juice(prep(make_recipe(phts_all, dummy_code = FALSE))),
+  final_recipe = prep(make_recipe(phts_all, dummy_code = FALSE)),
+  final_data = juice(final_recipe),
   
   final_model = fit_orsf(
     trn = final_data,
@@ -45,10 +46,17 @@ the_plan <- drake_plan(
   
   partial_table_data = make_partial_table_data(final_partial, labels),
   
-  tbl_partial = tabulate_partial_table_data(partial_table_data),
-  tbl_one = tabulate_characteristics(phts_all, labels)
-  
+  tbl_one = tabulate_characteristics(phts_all, labels),
+  tbl_variables = tabulate_missingness(final_recipe, phts_all, final_features, labels),
+  tbl_partial = tabulate_partial_table_data(partial_table_data)
   
 )
 
+# fig_mc_cv_vals$AUC$data %>% 
+#   dplyr::filter(ftr_selector == 'Predictors selected by permutation importance') %>% 
+#   readr::write_rds("../../seminar - obliqueRSF/data_phts_auc.rds")
+# 
+# fig_mc_cv_vals$GND.pvalue$data %>% 
+#   dplyr::filter(ftr_selector == 'Predictors selected by permutation importance') %>% 
+#   readr::write_rds("../../seminar - obliqueRSF/data_phts_gnd.rds")
 

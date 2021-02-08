@@ -12,22 +12,36 @@ output:
 library(flextable)
 library(glue)
 library(table.glue)
+library(stringr)
 library(officer)
 library(patchwork)
 library(ggplot2)
 library(magrittr)
+library(tidyr)
 library(dplyr, warn.conflicts = FALSE)
 library(purrr)
 library(Hmisc)
+
+knitr::opts_chunk$set(
+  echo = FALSE,
+  message = FALSE
+)
+
+conflicted::conflict_prefer('summarize', 'dplyr')
+conflicted::conflict_prefer('filter', 'dplyr')
+source('../R/cmp_incidence.R')
 
 knitr::opts_chunk$set(echo = FALSE)
 
 drake::loadd(
   phts_all,
   tbl_one,
+  tbl_variables,
   tbl_partial,
   fig_mc_cv_vals,
-  fig_mc_cv_inf
+  fig_mc_cv_inf,
+  labels,
+  final_features
 )
 
 ```
@@ -68,11 +82,15 @@ Missing values were imputed after data were split into training and testing sets
 
 <br>
 
+## Bayesian analysis of model performance
+
+We applied Bayesian hierarchical models to draw inferences regarding the expected performance of modeling algorithms, accounting for correlated performance within each replicate of Monte-Carlo cross-validation [@benavoli2017time]. Specifically, we estimated the posterior probability that a given technique to fit a risk prediction model had superior discrimination or calibration compared to other techniques. All comparisons were made holding the number of predictor variables and the method to select predictor variables fixed; i.e., both models used the same predictor variables.
+
+<br>
+
 ## Statistical analysis
 
-We conducted the current analysis following previously published guidelines on multivariable prediction models for individual prognosis and diagnosis [@moons2015transparent]. Characteristics of patients were calculated as mean with standard deviation or percent in the overall population and stratified by transplant year. The count and percent of missing values for each candidate predictor variable was also tabulated in the overall population and stratified by transplant year, and the proportion of missing values in these groups was compared using a chi-square test. As the total number of predictors in the current analysis exceeds the number that would be reasonable to present in a table, we only show these data for predictors that were selected in the final prediction model.  
-
-We visually assessed the discrimination and calibration of potential algorithms to develop a final prediction model as a function of the number of predictors included in the model. We applied 
+We conducted the current analysis following previously published guidelines on multivariable prediction models for individual prognosis and diagnosis [@moons2015transparent]. The 1 year incidence of graft loss or morality was computed overall and by transplant year. Characteristics of patients were calculated as mean with standard deviation or percent in the overall population and stratified by transplant year. Using the results from internal validation, we visually assessed the discrimination and calibration of candidate modeling algorithms to develop a final prediction model. We used posterior predicted probability to perform inference on pairwise comparisons between candidate modeling algorithms. To make results relevant for clinical settings, we restricted these pairwise comparisons to models that used 20 predictor variables. Based on the results, we selected a final prediction modeling algorithm and applied it to all the available data. We tabulated a summary of the variables included into the final prediction model - including the numeric importance value and rank along with the count and percent of how many missing values were present. We used partial dependence to estimate multivariable adjusted predicted risk as a function of each variable included in the final prediction model, separately [@molnar2020interpretable].
 
 <!-- We leveraged visual summaries of performance to select one modeling algorithm to develop a final prediction model using all available data. For this modeling algorithm, we tabulated discrimination and calibration from Monte-Carlo cross validation in the overall population and in subgroups defined by age, diagnosis group, and sex.  -->
 
@@ -82,35 +100,147 @@ r_version <- glue::glue("{version$major}.{version$minor}")
 
 <br>
 
-All analyses were conducted using SAS version 9.4, R version `r r_version`, and a number of open-source R packages [@r_language; @table.glue; @drake; @tidymodels; @tidyverse]. All R code for the current analysis is publicly available at https://github.com/bcjaeger/length-of-stay. Data for the current analysis are available by request from __FILL IN__.
+Analyses were conducted using SAS version 9.4, R version `r r_version`, and a number of open-source R packages [@r_language; @table.glue; @drake; @tidymodels; @tidyverse]. All R code for the current analysis is publicly available at https://github.com/bcjaeger/graft-loss. Data for the current analysis are available by request from __FILL IN__.
 
 <br>
 
 
 # RESULTS
 
+```{r, include=FALSE}
 
+
+phts_outcome_truncated <- phts_all %>% 
+  transmute(
+    time_1yr = pmin(time, 1),
+    status_1yr = if_else(time > 1, true = 0, false = status),
+    txpl_year
+  )
+
+phts_nested_overall <- phts_outcome_truncated %>% 
+  select(-txpl_year) %>% 
+  nest(data = c(time_1yr, status_1yr)) %>% 
+  mutate(group = 'overall', .before = data)
+
+phts_nested_by_year <- phts_outcome_truncated %>% 
+  nest(data = c(time_1yr, status_1yr)) %>% 
+  transmute(group = as.character(txpl_year),
+            data = data)
+
+inline_incidence <- bind_rows(phts_nested_overall,
+                              phts_nested_by_year) %>% 
+  mutate(incidence = map(.x = data, 
+                         .f = cmp_incidence,
+                         time = 'time_1yr', 
+                         status = 'status_1yr')) %>% 
+  unnest_wider(col = incidence) %>% 
+  mutate(
+    x = table_glue("{incidence_est} ({incidence_lwr}, {incidence_upr})"),
+    type = case_when(
+      group == 'overall' ~ 'overall',
+      incidence_est == min(incidence_est) ~ 'min',
+      incidence_est == max(incidence_est) ~ 'max'
+    )
+  ) %>% 
+  select(type, year = group, x) %>% 
+  drop_na() %>% 
+  as_inline(tbl_variables = c('type'),
+            tbl_values = c('year', 'x'))
+
+inline_auc <- fig_mc_cv_vals$AUC$data %>% 
+  transmute(
+    across(where(is.factor), as.character),
+    across(where(is.character), str_replace_all, ' ', '_'),
+    across(where(is.character), str_replace_all, '\n', '_'),
+    across(where(is.character), tolower),
+    n_predictors = paste("pred", n_predictors, sep = '_'),
+    value = table_glue("{value_est} ({value_lwr}, {value_upr})")) %>% 
+  as_inline(tbl_variables = c('model', 'ftr_selector', 'name', 'n_predictors'),
+            tbl_values = 'value')
+
+inline_cal <- fig_mc_cv_vals$GND.pvalue$data %>% 
+  transmute(
+    across(where(is.factor), as.character),
+    across(where(is.character), str_replace_all, ' ', '_'),
+    across(where(is.character), str_replace_all, '\n', '_'),
+    across(where(is.character), tolower),
+    n_predictors = paste("pred", n_predictors, sep = '_'),
+    value = table_glue("{value_est} ({value_lwr}, {value_upr})")) %>% 
+  as_inline(tbl_variables = c('model', 'ftr_selector', 'name', 'n_predictors'),
+            tbl_values = 'value')
+
+
+inline_winners <- 
+  list(auc = fig_mc_cv_vals$GND.pvalue$data,
+       cal = fig_mc_cv_vals$AUC$data) %>% 
+  map(~ .x %>% 
+        group_by(n_predictors, ftr_selector) %>% 
+        arrange(desc(value_est)) %>% 
+        slice(1) %>% 
+        ungroup() %>% 
+        count(model) %>% 
+        mutate(model = tolower(str_replace_all(model, ' |\\n', '_')))) %>% 
+  map(as_inline,
+      tbl_variables = c("model"),
+      tbl_values = 'n')
+
+
+```
+
+<br>
+
+Overall, the 1-year incidence of graft loss or mortality after transplant was `r inline_incidence$overall$x`. The incidence was highest during `r inline_incidence$max$year` and lowest during `r inline_incidence$min$year`, with incidence rates (95% CI) of `r inline_incidence$max$x` and `r inline_incidence$min$x`, respectively. The overall sample was `r tbl_one$inline$sex$Overall$male` male, `r tbl_one$inline$race$Overall$white` white, and had mean (standard deviation) age of  `r tbl_one$inline$age_listing$Overall$level_missing` years at the time of transplant (__Table 1__). 
+
+<br>
 
 ## Internal validation
 
+Internally validated estimates of the C-statistic showed a progressive increase in model discrimination as more predictors were included, except when proportional hazards regression was applied to develop the risk prediction model (__Figure 2__). The oblique random survival forest obtained the highest C-statistic in `r inline_winners$auc$oblique_random_survival_forest` of 21 comparisons, and obtained the highest overall C-statistic when 15 or more predictor variables were selected, regardless of the variable selection method.  
 
+<br>
+
+With the exception of boosting, all modeling algorithms obtained adequate calibration (i.e., p-value for mis-calibration ≥ 0.05; __Figure 3__). The oblique random survival forest obtained the highest p-value for mis-calibration in `r inline_winners$cal$oblique_random_survival_forest` of 21 comparisons. When predictors were selected using permutation importance, the oblique random survival forest obtained the first and second highest median p-values for mis-calibration using 35 and 20 predictor variables, respectively.
+
+__Bayesian analysis of model performance__: As discrimination and calibration were generally higher when permutation importance was applied, we focused our pairwise comparisons to models developed using 20 predictors selected by permutation importance (__Figure 4__). In this setting, oblique random survival forests obtained the highest C-statistic (`r fig_mc_cv_inf$inline$plot_center$auc$orsf`) and p-value for mis-calibration (`r fig_mc_cv_inf$inline$plot_center$gnd$orsf`). The posterior probability that oblique random survival forests obtained superior discrimination versus other modeling algorithms ranged from `r round(fig_mc_cv_inf$inline$plot_sides$auc$xgb$orsf$prob_gt_0_numeric,2)` (versus boosting) to `r round(fig_mc_cv_inf$inline$plot_sides$auc$cph$orsf$prob_gt_0_numeric,2)` (versus proportion hazards). The posterior probability that oblique random survival forests obtained superior calibration versus other modeling algorithms ranged from `r round(fig_mc_cv_inf$inline$plot_sides$gnd$orsf$rsf$prob_gt_0_numeric,2)` (versus standard random forests) to `r round(fig_mc_cv_inf$inline$plot_sides$gnd$orsf$xgb$prob_gt_0_numeric,2)` (versus boosting). 
+
+__Selection of the final modeling algorithm__: To maintain clinical relevance, we limited the number of predictors in our final model to 20. Under this setting, using permutation importance to select predictors and oblique random survival forests to fit a risk prediction provided the best discrimination (C = `r bracket_drop(inline_auc$oblique_random_survival_forest$predictors_selected_by_permutation_importance$auc$pred_20)` and calibration (P-value for mis-calibration = `r bracket_drop(inline_cal$oblique_random_survival_forest$predictors_selected_by_permutation_importance$gnd.pvalue$pred_20)`). Therefore, we fit our final prediction model using the oblique random survival forest after selecting 20 predictors using permutation importance. 
 
 <br>
 
 ## Model summary
 
+The three variables with greatest permutation importance were cardiopulmonary bypass time, primary etiology (cardiomyopathy, congenital heart disease, or other), and ECMO at transplant (__Table 2__). Among the variables selected, the percentage of values missing ranged from 0 to `r tbl_variables$inline$chd_hlh$pct_miss`, and the overall percentage of values missing in the training data was `r table_value(mean(as.numeric(tbl_variables$table$body$dataset$pct_miss)))` 
+
+```{r}
+
+variable_importance <- final_features$importance %>% 
+  separate(name, into = c('variable', 'category'), sep = '\\.\\.',
+           remove = FALSE, fill = 'right')
+
+inline_variables_final_model <- labels$variables %>% 
+  right_join(variable_importance) %>% 
+  mutate(label = str_remove(label, '^F\\dT |^F\\d ')) %>% 
+  arrange(desc(value))
+
+```
 
 
 \newpage
-
 <!-- TABLE 1: characteristics of participants for all variables -->
 __Table 1:__ Characteristics of patients included in the current analysis.
 `r fp_par(line_spacing = 1)`
 `r tbl_one$table`
 \newpage
 
-<!-- TABLE 2: Final model; variable dependence -->
-__Table 2:__ Predicted risk for graft loss or mortality at 1 year following transplant according to the final prediction model from the current analysis.
+<!---BLOCK_LANDSCAPE_START--->
+<!-- TABLE 2: Final model; variable missingness and importance -->
+__Table 2:__ Variable missingness and importance for predictors used in the final prediction model.
+`r fp_par(line_spacing = 1)`
+`r tbl_variables$table`
+<!---BLOCK_LANDSCAPE_STOP--->
+
+<!-- TABLE 3: Final model; variable dependence -->
+__Table 3:__ Predicted risk for graft loss or mortality at 1 year following transplant according to the final prediction model from the current analysis.
 `r fp_par(line_spacing = 1)`
 `r tbl_partial$table`
 \newpage
@@ -157,17 +287,12 @@ Calibration was assessed at 1 year after transplant using __FILL IN__.
 
 <!-- FIGURE 4: Inference  -->
 \newpage
-__Figure 3:__ Bayesian estimates of differences in model performance when 20 variables were selected using permutation importance.
+__Figure 4:__ Bayesian estimates of differences in model performance when 20 variables were selected using permutation importance.
 `r fp_par(line_spacing = 1)`
 
 ```{r, fig.width=6, fig.height=6.5, dpi=300}
-fig_mc_cv_inf
+fig_mc_cv_inf$figure
 ```
-
-<!-- TABLE S1: missingness of all variables -->
-\newpage
-__Table S1:__ Number (percentage) of missing values for candidate predictor variables in the overall population and stratified by transplant year.
-`r fp_par(line_spacing = 1)`
 
 \newpage
 # REFERENCES

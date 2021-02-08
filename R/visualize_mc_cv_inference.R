@@ -95,6 +95,7 @@ visualize_mc_cv_inference <- function(mc_cv,
         table_glue("Difference: {100*estimate}\nP({toupper(exp)} > {toupper(ref)}): {prob_gt_0}"),
         table_glue("Difference: {estimate}\nP({toupper(ref)} > {toupper(exp)}): {prob_gt_0}")
       ),
+      prob_gt_0_numeric = prob_gt_0,
       prob_gt_0 = cut(x = prob_gt_0,
                       breaks = c(0.00, 0.50, 0.75, 0.95, 1),
                       labels = c("0 to 0.50",
@@ -107,7 +108,21 @@ visualize_mc_cv_inference <- function(mc_cv,
     filter(metric == 'auc') %>% 
     mutate(label = toupper(ref))
   
-  ggplot(plot_data) +
+  inline_linpreds <- linpreds %>% 
+    mutate(estimate = round(estimate, 3)) %>% 
+    as_inline(tbl_variables = c('metric', 'ref'),
+              tbl_value = 'estimate')
+  
+  inline_plot_data <- plot_data %>% 
+    mutate(estimate = round(estimate, 3),
+           prob_gt_0_numeric = round(prob_gt_0_numeric, 3)) %>% 
+    as_inline(tbl_variables = c("metric", "ref", "exp"),
+              tbl_values = c("estimate", "prob_gt_0_numeric"))
+  
+  inline <- list(plot_center = inline_linpreds,
+                 plot_sides = inline_plot_data)
+  
+  fig <- ggplot(plot_data) +
     aes(x = exp, y = ref, fill = prob_gt_0, label = label) + 
     geom_tile() + 
     geom_text(size = 3.5) + 
@@ -135,6 +150,10 @@ visualize_mc_cv_inference <- function(mc_cv,
           legend.justification = 'center') + 
     scale_fill_jama(alpha = 1/2)
   
+  list(
+    inline = inline, 
+    figure = fig
+  )
   
 }
 
