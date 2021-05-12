@@ -8,7 +8,8 @@ load_mc_cv <- function() {
 
   bind_rows(
     read_rds('data/mc_cv_results_250.rds'),
-    read_rds('data/mc_cv_results_500.rds')
+    read_rds('data/mc_cv_results_500.rds'),
+    read_rds('data/mc_cv_results_750.rds')
   )
 
 }

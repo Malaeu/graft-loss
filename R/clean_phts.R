@@ -69,13 +69,26 @@ clean_phts <- function(
       prim_dx = fct_collapse(
         .f = factor(prim_dx),
         other = c('cardiac_tumor', 'myocarditis', 'other_specify')
+      ),
+      prim_dx = factor(
+        prim_dx, 
+        levels = c('cardiomyopathy',
+                   'congenital_hd',
+                   'other')
+      ),
+      tx_mcsd = if_else(
+        txnomcsd == 'yes', 
+        true = 'no', 
+        false = 'yes'
       )
     ) %>% 
     rename(
       time = !!time_quo,
       status = !!status_quo
     ) %>% 
-    select(-starts_with('outcome'))
+    select(-starts_with('outcome'),
+           -txnomcsd,
+           -lbun_r)
   
   too_many_missing <- miss_var_summary(data = out) %>% 
     filter(pct_miss > 30) %>% 
@@ -83,8 +96,15 @@ clean_phts <- function(
   
   out[, too_many_missing] <- NULL
   
-  write_rds(out, 'data/phts_all.rds')
   
-  out
+  # remove some variables that are collected at listing
+  # and also at transplant, but don't need to be included
+  # in both of the visits:
+  
+  out <- out %>% 
+    select(-height_listing,
+           -weight_listing)
+  
+  write_rds(out, 'data/phts_all.rds')
   
 }

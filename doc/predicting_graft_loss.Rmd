@@ -24,7 +24,8 @@ library(Hmisc)
 
 knitr::opts_chunk$set(
   echo = FALSE,
-  message = FALSE
+  message = FALSE,
+  warning = FALSE
 )
 
 conflicted::conflict_prefer('summarize', 'dplyr')
@@ -33,16 +34,7 @@ source('../R/cmp_incidence.R')
 
 knitr::opts_chunk$set(echo = FALSE)
 
-drake::loadd(
-  phts_all,
-  tbl_one,
-  tbl_variables,
-  tbl_partial,
-  fig_mc_cv_vals,
-  fig_mc_cv_inf,
-  labels,
-  final_features
-)
+drake::loadd()
 
 ```
 
@@ -239,14 +231,15 @@ __Table 2:__ Variable missingness and importance for predictors used in the fina
 `r tbl_variables$table`
 <!---BLOCK_LANDSCAPE_STOP--->
 
+
 <!-- TABLE 3: Final model; variable dependence -->
-__Table 3:__ Predicted risk for graft loss or mortality at 1 year following transplant according to the final prediction model from the current analysis.
+__Table 3:__ Predicted risk for graft loss or mortality at 1 year following transplant according to the 10 most important variables selected for inclusion in the final prediction model.
 `r fp_par(line_spacing = 1)`
-`r tbl_partial$table`
+`r tbl_partial_main$table`
 \newpage
 
 
-<!-- FIGURE 1: Diagrom  -->
+<!-- FIGURE 1: Diagram  -->
 __Figure 1:__ Model development algorithm considered in the current analysis. 
 ```{r, out.width='100%'}
 knitr::include_graphics('../fig/recipe.png')
@@ -293,6 +286,33 @@ __Figure 4:__ Bayesian estimates of differences in model performance when 20 var
 ```{r, fig.width=6, fig.height=6.5, dpi=300}
 fig_mc_cv_inf$figure
 ```
+
+<!---BLOCK_LANDSCAPE_START--->
+__Figure 5:__ Incidence of graft loss or mortality, stratified by the four variables with greatest permuation importance in the final prediction model.
+`r fp_par(line_spacing = 1)`
+
+```{r, fig.width=9, fig.height=6, dpi=300}
+fig_final_features
+```
+<!---BLOCK_LANDSCAPE_STOP--->
+
+# SUPPLEMENT
+
+\newpage
+
+__Table S1__: Summary of all continuous candidate predictor variables.
+`r fp_par(line_spacing = 1)`
+`r tbl_predictor_smry$continuous`
+\newpage
+
+__Table S2__: Summary of all categorical candidate predictor variables.
+`r fp_par(line_spacing = 1)`
+`r tbl_predictor_smry$categorical`
+\newpage
+
+__Table S3__: Predicted risk for graft loss or mortality at 1 year following transplant according to variables with rank 11th or higher importance selected for inclusion in the final prediction model.
+`r fp_par(line_spacing = 1)`
+`r tbl_partial_supp$table`
 
 \newpage
 # REFERENCES

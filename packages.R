@@ -36,6 +36,8 @@ library(magick)
 library(paletteer)
 library(ggdist)
 library(ggsci)
+library(cmprsk)
+library(patchwork)
 
 conflicted::conflict_prefer("roc",       "pROC")
 conflicted::conflict_prefer("filter",    "dplyr")

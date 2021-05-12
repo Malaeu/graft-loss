@@ -4,18 +4,14 @@
 ##'
 ##' @title
 ##' @param phts_all
-tabulate_characteristics <- function(phts_all, labels) {
+tabulate_characteristics <- function(phts_all, labels, extra_variables) {
 
   tb1_vars <- 
-    c("age_listing",
+    c("age_txpl",
       "sex",
       "race",
-      "hisp",
-      "prim_dx",
-      "hxsurg",
-      "hxmed",
-      "txecmo",
-      "txnomcsd")
+      "hisp") %>% 
+    union(extra_variables)
   
   # make this label more clear for table 1
   labels$variables$label[labels$variables$variable == 'sex'] <- 
@@ -30,20 +26,27 @@ tabulate_characteristics <- function(phts_all, labels) {
         labels = c("Before 2014", "2014 through 2016", "After 2017")
       )
     ) %>%
-    select(txpl_year, !!!tb1_vars)
+    select(txpl_year, !!!tb1_vars) %>% 
+    mutate(across(where(is.character), as.factor))
 
   overall <- tbl_data_raw %>%
     select(-txpl_year) %>%
     map_dfr(tb1_fun, .id = 'variable') %>%
-    mutate(group = 'Overall')
+    mutate(group = table_glue('Overall\n(N = {nrow(tbl_data_raw)})'))
 
+  by_year_counts <- count(tbl_data_raw, txpl_year) %>% 
+    rename(group = txpl_year)
+  
   by_year <- tbl_data_raw %>%
     split(.$txpl_year) %>%
     map_dfr(
       ~ select(.x, -txpl_year) %>%
         map_dfr(tb1_fun, .id = 'variable'),
       .id = 'group'
-    )
+    ) %>% 
+    left_join(by_year_counts) %>% 
+    mutate(group = table_glue("{group}\n(N = {n})")) %>% 
+    select(-n)
 
   tbl_data <- bind_rows(overall, by_year)
 
@@ -96,6 +99,8 @@ tabulate_characteristics <- function(phts_all, labels) {
   )
 
   tbl_flex <- tbl_grouped_data %>%
+    mutate(level = recode(level, !!!deframe(labels$categories)),
+           level = Hmisc::capitalize(level)) %>% 
     as_flextable(hide_grouplabel = TRUE)  %>%
     add_header_row(
       values = c('Variable', 'Overall', 'Transplant year'),
@@ -108,7 +113,7 @@ tabulate_characteristics <- function(phts_all, labels) {
             j = 1,
             padding.left = 15) %>%
     width(j = 1, width = 2.5) %>%
-    width(j = c(2:5), width = 1.1) %>%
+    width(j = c(2:5), width = 1.25) %>%
     set_header_labels(level = 'Variable') %>%
     merge_v(j = c(1,2), part = 'header') %>%
     font(fontname = 'Times New Roman', part = 'all') %>%
@@ -117,7 +122,7 @@ tabulate_characteristics <- function(phts_all, labels) {
       i = 1,
       j = 1,
       value = as_paragraph(
-        'Table values are mean (standard deviation)',
+        'Table values are median (25th percentile, 75th percentile)',
         ' and percent for continuous and categorical',
         ' variables, respectively.'
       )

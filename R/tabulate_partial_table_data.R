@@ -4,9 +4,11 @@
 ##'
 ##' @title
 ##' @param partial_table_data
-tabulate_partial_table_data <- function(partial_table_data) {
+tabulate_partial_table_data <- function(partial_table_data,
+                                        features) {
 
   ft <- partial_table_data %>% 
+    filter(variable %in% features) %>% 
     select(-variable) %>% 
     as_grouped_data(groups = 'label') %>% 
     as_flextable(hide_grouplabel = TRUE) %>% 
