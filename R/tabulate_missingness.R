@@ -33,22 +33,9 @@ tabulate_missingness <- function(final_recipe,
   data_impute_values <- bind_rows(impute_medians, impute_modes) %>% 
     rename(variable = name, impute_miss = impute_with)
   
-  data_importance <- final_features$importance %>% 
-    rename(variable = name, importance = value) %>% 
-    mutate(variable = str_remove(variable, '\\.\\..*$')) %>% 
-    group_by(variable) %>% 
-    summarize(importance = mean(importance)) %>% 
-    mutate(
-      importance_rescaled = rescale(importance, 
-                                    from = c(0, max(importance)),
-                                    to = c(0,1))
-    )
   
   data_table <- data_miss_var %>% 
-    left_join(data_importance) %>% 
     left_join(data_impute_values) %>% 
-    arrange(desc(importance)) %>% 
-    mutate(importance_rank = 1:n()) %>% 
     left_join(labels$variables)
   
   inline <- data_table %>% 
@@ -56,31 +43,24 @@ tabulate_missingness <- function(final_recipe,
       tbl_variables = c('variable'),
       tbl_values = c('n_miss', 
                      'pct_miss',
-                     'impute_miss',
-                     'importance', 
-                     'importance_rescaled',
-                     'importance_rank')
+                     'impute_miss')
     )
   
   ft <- data_table %>% 
-    select(label, ends_with('miss'), starts_with('impo')) %>% 
+    select(label, ends_with('miss')) %>% 
     flextable() %>% 
     set_header_labels(label = "Predictor variable",
                       n_miss = 'Number',
                       pct_miss = 'Percent',
-                      impute_miss = 'Imputed to',
-                      importance = 'Change in C-statistic',
-                      importance_rescaled = 'Scaled',
-                      importance_rank = 'Rank') %>% 
+                      impute_miss = 'Imputed to') %>% 
     add_header_row(values = c("Predictor variable", 
-                              "Missing values", 
-                              "Permutation Importance"),
-                   colwidths = c(1, 3, 3)) %>% 
+                              "Missing values"),
+                   colwidths = c(1, 3)) %>% 
     theme_box() %>% 
     merge_v(j = 1, part = 'header') %>% 
     align(align = 'center', part = 'all') %>% 
     align(align = 'left', part = 'all', j = 1) %>% 
-    width(width = 1) %>% 
+    width(j = c(2,3,4), width = 1.5) %>% 
     width(j = 1, width = 2.5)
   
   list(
