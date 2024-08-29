@@ -23,3 +23,80 @@ Statistical analysis
 We conducted the current analysis following previously published guidelines on multivariable prediction models for individual prognosis and diagnosis (20). The 1 year incidence of graft loss or morality was computed overall and by transplant year. Characteristics of patients were calculated as mean with standard deviation or percent in the overall population and stratified by transplant year. Using the results from internal validation, we visually assessed the discrimination and calibration of candidate modeling algorithms to develop a final prediction model. We used posterior predicted probability to perform inference on pairwise comparisons between candidate modeling algorithms. To make results relevant for clinical settings, we restricted these pairwise comparisons to models that used 20 predictor variables. Based on the results, we selected a final prediction modeling algorithm and applied it to all the available data. We tabulated a summary of the variables included into the final prediction model - including the numeric importance value and rank along with the count and percent of how many missing values were present. We used partial dependence to estimate multivariable adjusted predicted risk as a function of each variable included in the final prediction model, separately (21).
 
 Analyses were conducted using SAS version 9.4, R version 4.0.4, and a number of open-source R packages (22–26). All R code for the current analysis is publicly available at https://github.com/bcjaeger/graft-loss. Data for the current analysis are available by request from FILL IN.
+
+# Integrate methodology from instructions.txt into your_project.R
+
+# Data preparation
+your_data <- clean_your_data(
+  min_year = your_specific_min_year,
+  predict_horizon = 360,  # Assuming 360 days prediction horizon
+  time = your_time_variable,
+  status = your_death_variable
+)
+
+# Select all 360 variables
+all_features <- select_all_features(your_data)
+
+# Create labels
+labels <- make_labels(colname_variable = 'variable', 
+                      colname_label = 'label')
+
+# Monte Carlo cross-validation
+resamples <- mc_cv_light(your_data, ntimes = 500)  # 500 replications as per methodology
+mc_cv <- load_mc_cv()
+
+# Visualize cross-validation results
+fig_mc_cv_vals <- visualize_mc_cv(mc_cv)
+fig_mc_cv_inf <- visualize_mc_cv_inference(mc_cv, 
+                                           ftr_method = c('contribution', 'permutation', 'stepwise'),
+                                           n_pred = c(5, 10, 15, 20, 25, 30, 35))  # As per 7 options for predictor numbers
+
+# Select final features based on importance
+final_features <- make_final_features(your_data, n_features = 20)  # Using 20 predictors as mentioned
+
+# Create final model
+final_recipe <- prep(make_recipe(your_data, dummy_code = FALSE))
+final_data <- juice(final_recipe)
+
+# Fit models using different methods
+final_model_cph <- fit_cph(trn = final_data, vars = final_features$variables)
+final_model_xgb <- fit_xgb(trn = final_data, vars = final_features$variables)
+final_model_rsf <- fit_rsf(trn = final_data, vars = final_features$variables)
+final_model_orsf <- fit_orsf(trn = final_data, vars = final_features$variables)
+
+# Calculate partial dependencies
+final_partial <- make_final_partial(final_model_orsf, final_data, final_features)
+partial_table_data <- make_partial_table_data(final_partial, labels)
+
+# Create tables
+tbl_one <- tabulate_characteristics(your_data, labels, final_features$variables)
+tbl_predictor_smry <- tabulate_predictor_smry(your_data, labels)
+tbl_variables <- tabulate_missingness(final_recipe, your_data, final_features, labels)
+tbl_partial_main <- tabulate_partial_table_data(partial_table_data, final_features$variables)
+
+# Visualize feature importance
+plot_feature_importance <- function(model, data) {
+  # Code to visualize variable importance
+}
+
+feature_importance_plot <- plot_feature_importance(final_model_orsf, final_data)
+
+# Summary table of most important variables
+top_variables_table <- create_top_variables_table(final_model_orsf, labels)
+
+# Evaluate model performance
+performance_metrics <- evaluate_model_performance(final_model_orsf, test_data, time_dependent = TRUE)
+
+# Bayesian analysis of model performance
+bayesian_performance <- bayesian_model_comparison(list(cph = final_model_cph, 
+                                                       xgb = final_model_xgb, 
+                                                       rsf = final_model_rsf, 
+                                                       orsf = final_model_orsf))
+
+# Handle missing data
+impute_missing_data <- function(train_data, test_data) {
+  # Impute missing values using mean/mode from training data
+}
+
+# Note: Ensure to apply imputation within each fold of cross-validation
+
