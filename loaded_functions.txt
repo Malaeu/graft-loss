@@ -1,0 +1,1235 @@
+1. Функция: capitalize
+   Файл: capitalize.R
+   Код:
+   function (string) 
+   {
+       capped <- grep("^[A-Z]", string, invert = TRUE)
+       substr(string[capped], 1, 1) <- toupper(substr(string[capped], 
+           1, 1))
+       return(string)
+   }
+
+2. Функция: catg_fun
+   Файл: tabulate_predictor_smry.R
+   Код:
+   function (x, data) 
+   {
+       .x <- data[[x]]
+       counts <- table(.x)
+       props <- 100 * prop.table(counts)
+       names(counts) <- str_replace_all(names(counts), "_", " ")
+       tbl_values <- rep(NA_character_, length(counts))
+       for (i in seq_along(tbl_values)) {
+           tbl_values[i] <- table_glue("- {capitalize(names(counts)[i])}: {counts[i]} ({props[i]}%)")
+       }
+       paste(tbl_values, collapse = "\n")
+   }
+
+3. Функция: clean_chr
+   Файл: clean_chr.R
+   Код:
+   function (x, case = "snake", set_to_na = "") 
+   {
+       x[tolower(x) %in% tolower(set_to_na)] <- NA_character_
+       ux <- unique(na.omit(x))
+       ux_clean <- make_clean_names(ux, case = case)
+       names(ux_clean) <- ux
+       recode(x, !!!ux_clean)
+   }
+
+4. Функция: clean_phts
+   Файл: clean_phts.R
+   Код:
+   function (min_txpl_year, predict_horizon, time, status, case = "snake", 
+       set_to_na = "") 
+   {
+       time_quo <- enquo(time)
+       status_quo <- enquo(status)
+       out <- read_sas("data/phts_txpl_ml.sas7bdat") %>% filter(TXPL_YEAR >= 
+           min_txpl_year) %>% select(-c(LSPRA, LSCPRAT, LSCPRAB, 
+           LSPRADTE, LSPRDTET, LSPRDTEB, LSFCPRA, LSFPRAT, LSFPRAB, 
+           TXCPRA, CPRAT, CPRAB, TXPRADTE, CPRADTET, CPRADTEB, TXFCPRA, 
+           FPRAT, FPRAB)) %>% clean_names() %>% mutate(ID = 1:n(), 
+           across(.cols = where(is.character), ~clean_chr(.x, case = case, 
+               set_to_na = set_to_na)), across(.cols = c(outcome_waitlist_interval, 
+               outcome_int_graft_loss), ~replace(.x, list = .x == 
+               0, values = 1/365)), across(.cols = where(is.character), 
+               as.factor), prim_dx = fct_collapse(.f = factor(prim_dx), 
+               other = c("cardiac_tumor", "myocarditis", "other_specify")), 
+           prim_dx = factor(prim_dx, levels = c("cardiomyopathy", 
+               "congenital_hd", "other")), tx_mcsd = if_else(txnomcsd == 
+               "yes", true = "no", false = "yes")) %>% rename(time = !!time_quo, 
+           status = !!status_quo) %>% select(-starts_with("outcome"), 
+           -txnomcsd, -lbun_r)
+       too_many_missing <- miss_var_summary(data = out) %>% filter(pct_miss > 
+           30) %>% pull(variable)
+       out[, too_many_missing] <- NULL
+       out <- out %>% select(-height_listing, -weight_listing)
+       write_rds(out, "data/phts_all.rds")
+   }
+
+5. Функция: cmp_incidence
+   Файл: cmp_incidence.R
+   Код:
+   function (data, time, status) 
+   {
+       total_events <- sum(getElement(data, status))
+       total_time <- sum(getElement(data, time))
+       estimate = total_events/total_time
+       fit <- glm(total_events ~ offset(log(total_time)), family = "poisson")
+       fit_ci <- exp(confint(fit))
+       list(incidence_est = estimate, incidence_lwr = fit_ci["2.5 %"], 
+           incidence_upr = fit_ci["97.5 %"])
+   }
+
+6. Функция: fit_cph
+   Файл: fit_cph.R
+   Код:
+   function (trn, vars = NULL, tst, predict_horizon = NULL) 
+   {
+       model <- safe_coxph(data = trn[, c(vars, "time", "status")], 
+           x = TRUE)
+       if (is.null(tst)) 
+           return(model)
+       if (is.null(predict_horizon)) 
+           stop("specify prediction horizon", call. = F)
+       predictRisk(model, newdata = tst[, vars], times = predict_horizon)
+   }
+
+7. Функция: fit_evaluation
+   Файл: fit_evaluation.R
+   Код:
+   function (predicted_risk, predict_horizon, score_data) 
+   {
+       evaluation <- Score(object = list(predicted_risk), formula = Surv(time, 
+           status) ~ 1, summary = "IPA", data = score_data, times = predict_horizon, 
+           se.fit = FALSE)
+       do_over <- TRUE
+       too_few_groups <- FALSE
+       group_count <- 10
+       while (do_over) {
+           groups = as.numeric(cut2(predicted_risk, g = group_count))
+           status_before_horizon <- score_data$status
+           status_before_horizon[score_data$time < predict_horizon] <- 0
+           group_event_counts <- table(groups = groups, status = status_before_horizon) %>% 
+               as_tibble() %>% filter(status == 1)
+           if (all(group_event_counts$n > 5)) {
+               do_over <- FALSE
+           }
+           group_count <- group_count - 1
+           if (group_count == 1) {
+               too_few_groups <- TRUE
+               do_over <- FALSE
+           }
+       }
+       if (too_few_groups) {
+           GND_fail <- TRUE
+           GND.result <- NULL
+       }
+       else {
+           GND.result <- try(GND.calib(pred = predicted_risk, tvar = score_data$time, 
+               out = score_data$status, cens.t = predict_horizon, 
+               groups = groups, adm.cens = predict_horizon), silent = TRUE)
+           GND_fail <- inherits(GND.result, "try-error")
+       }
+       AUC <- evaluation$AUC$score$AUC
+       IPA <- evaluation$Brier$score$IPA[2]
+       if (GND_fail) {
+           GND.chisq <- NA_real_
+           GND.pvalue <- NA_real_
+       }
+       else {
+           GND.chisq <- GND.result["chi2gw"]
+           GND.pvalue <- GND.result["pvalgw"]
+       }
+       tibble(AUC = AUC, IPA = IPA, GND.chisq = GND.chisq, GND.pvalue = GND.pvalue)
+   }
+
+8. Функция: fit_final_orsf
+   Файл: fit_final_orsf.R
+   Код:
+   function (phts_all, n_predictors = 35) 
+   {
+       .recipe <- prep(make_recipe(data = phts_all))
+       trn = juice(.recipe)
+       feature_selector <- ranger(formula = Surv(time, status) ~ 
+           ., data = trn, num.trees = 250, importance = "permutation", 
+           min.node.size = 20, splitrule = "extratrees", num.random.splits = 10)
+       rsf_vars <- c("time", "status", get_topvars(feature_selector, 
+           n_predictors = n_predictors))
+       orsf_model <- ORSF(trn[, rsf_vars], ntree = 100, compute_oob_predictions = TRUE, 
+           eval_times = c(3, 6, 9, 12)/12)
+       orsf_risk_1yr <- 1 - orsf_model$oob_preds[, 4]
+       ggdat <- bind_cols(risk_1yr = orsf_risk_1yr, orsf_model$data)
+       ggplot(ggdat, aes(x = cpbypass, y = risk_1yr)) + geom_smooth()
+       vdplot(object = orsf_model, xvar = "hxsurg..yes", fvar = "prim_dx..congenital_hd", 
+           )
+       vdplot(orsf_model, xvar = "cpbypass")
+       vdplot(orsf_model, xvar = "txinhosp..yes")
+       p <- pdplot(orsf_model, xvar = "cpbypass")
+   }
+
+9. Функция: fit_orsf
+   Файл: fit_orsf.R
+   Код:
+   function (trn, vars, tst = NULL, predict_horizon = NULL) 
+   {
+       model <- ORSF(trn[, c("time", "status", vars)], ntree = 1000)
+       if (is.null(tst)) 
+           return(model)
+       if (is.null(predict_horizon)) 
+           stop("specify prediction horizon", call. = F)
+       1 - predict(model, newdata = tst[, c("time", "status", vars)], 
+           times = predict_horizon)
+   }
+
+10. Функция: fit_rsf
+   Файл: fit_rsf.R
+   Код:
+   function (trn, vars, tst = NULL, predict_horizon = NULL) 
+   {
+       model <- ranger(formula = Surv(time, status) ~ ., data = trn[, 
+           c("time", "status", vars)], num.trees = 1000, min.node.size = 10, 
+           splitrule = "C")
+       if (is.null(tst)) 
+           return(model)
+       if (is.null(predict_horizon)) 
+           stop("specify prediction horizon", call. = F)
+       ranger_predictrisk(model, newdata = tst, times = predict_horizon)
+   }
+
+11. Функция: fit_step
+   Файл: fit_step.R
+   Код:
+   function (trn, tst, return_fit, predict_horizon, n_predictors) 
+   {
+       step_init <- coxph(Surv(time, status) ~ 1, data = trn, x = TRUE)
+       step_scope_rhs <- trn %>% select(-time, -status) %>% names() %>% 
+           glue_collapse(sep = " + ")
+       step_scope <- as.formula(glue("Surv(time, status) ~ {step_scope_rhs}"))
+       step_fit <- stepAIC(object = step_init, scope = step_scope, 
+           direction = "both", steps = n_predictors, trace = 0)
+       step_vars <- names(step_fit$coefficients)
+       trn_xgb <- as.matrix(trn[, step_vars])
+       xgb_params <- list(eta = 0.01, max_depth = 2, gamma = 1/2, 
+           min_child_weight = 1, subsample = 2/3, colsample_bynode = 1/3, 
+           objective = "survival:cox", eval_metric = "cox-nloglik")
+       xgb_label <- trn$time
+       censored <- trn$status == 0
+       xgb_label[censored] <- xgb_label[censored] * (-1)
+       xgb_cv <- xgb.cv(params = xgb_params, data = trn_xgb, nrounds = 2500, 
+           nfold = 10, early_stopping_rounds = 100, label = xgb_label, 
+           verbose = 0)
+       booster <- sgb_fit(sgb_df = sgb_data(data = trn_xgb, label = xgb_label), 
+           nrounds = xgb_cv$best_iteration, params = xgb_params)
+       orsf_trn <- as_tibble(trn)[, c("time", "status", step_vars)]
+       orsf_tst <- as_tibble(tst)[, c("time", "status", step_vars)]
+       orsf_model <- ORSF(orsf_trn, ntree = 1000)
+       rsf_model <- ranger(formula = Surv(time, status) ~ ., data = orsf_trn, 
+           num.trees = 1000, min.node.size = 10, splitrule = "C")
+       if (return_fit) 
+           return(list(booster = booster, cph = step_fit, orsf = orsf_model, 
+               rsf = rsf_model))
+       predicted_risk_cph <- predictRisk(step_fit, newdata = tst, 
+           times = predict_horizon)
+       predicted_risk_xgb <- 1 - predict(booster, new_data = as.matrix(as_tibble(tst)[, 
+           step_vars]), eval_times = predict_horizon)
+       predicted_risk_orsf <- 1 - predict(orsf_model, newdata = orsf_tst, 
+           times = predict_horizon)
+       predicted_risk_rsf <- ranger_predictrisk(rsf_model, newdata = orsf_tst, 
+           times = predict_horizon)
+       score_data <- select(tst, time, status)
+       xgb_scores <- fit_evaluation(predicted_risk = predicted_risk_xgb, 
+           predict_horizon = predict_horizon, score_data = score_data, 
+           fit_label = "xgb", ftr_label = "step")
+       orsf_scores <- fit_evaluation(predicted_risk = predicted_risk_orsf, 
+           predict_horizon = predict_horizon, score_data = score_data, 
+           fit_label = "orsf", ftr_label = "step")
+       cph_scores <- fit_evaluation(predicted_risk = predicted_risk_cph, 
+           predict_horizon = predict_horizon, score_data = score_data, 
+           fit_label = "cph", ftr_label = "step")
+       rsf_scores <- fit_evaluation(predicted_risk = predicted_risk_rsf, 
+           predict_horizon = predict_horizon, score_data = score_data, 
+           fit_label = "rsf", ftr_label = "step")
+       bind_rows(xgb_scores, orsf_scores, cph_scores)
+   }
+
+12. Функция: fit_xgb
+   Файл: fit_xgb.R
+   Код:
+   function (trn, vars, tst = NULL, predict_horizon = NULL) 
+   {
+       trn_x <- as.matrix(select(trn, -c(time, status)))
+       trn_y <- as.matrix(select(trn, c(time, status)))
+       xgb_label <- trn_y[, 1]
+       censored <- trn_y[, 2] == 0
+       xgb_label[censored] <- xgb_label[censored] * (-1)
+       model <- sgb_fit(sgb_df = sgb_data(trn_x[, vars], xgb_label), 
+           verbose = 0, params = list(eta = 0.01, max_depth = 3, 
+               gamma = 1/2, min_child_weight = 2, subsample = 1/2, 
+               colsample_bynode = 1/2, objective = "survival:cox", 
+               eval_metric = "cox-nloglik"))
+       if (is.null(tst)) 
+           return(model)
+       if (is.null(predict_horizon)) 
+           stop("specify prediction horizon", call. = F)
+       1 - predict(model, new_data = as.matrix(tst[, vars]), eval_times = predict_horizon)
+   }
+
+13. Функция: GND_test
+   Файл: GND_calibration.R
+   Код:
+   function (predicted_risk, predict_horizon, event_time, event_status) 
+   {
+       do_over <- TRUE
+       too_few_groups <- FALSE
+       group_count <- 10
+       while (do_over) {
+           groups = as.numeric(cut2(predicted_risk, g = group_count))
+           status_before_horizon <- event_status
+           status_before_horizon[event_time < predict_horizon] <- 0
+           group_event_counts <- table(groups = groups, event_status = status_before_horizon) %>% 
+               as_tibble() %>% filter(event_status == 1)
+           if (all(group_event_counts$n > 5)) {
+               do_over <- FALSE
+           }
+           group_count <- group_count - 1
+           if (group_count == 1) {
+               too_few_groups <- TRUE
+               do_over <- FALSE
+           }
+       }
+       if (too_few_groups) {
+           GND_fail <- TRUE
+           GND.result <- NULL
+       }
+       else {
+           GND.result <- try(GND.calib(pred = predicted_risk, tvar = event_time, 
+               out = event_status, cens.t = predict_horizon, groups = groups, 
+               adm.cens = predict_horizon), silent = TRUE)
+           GND_fail <- inherits(GND.result, "try-error")
+       }
+       if (GND_fail) {
+           GND.chisq <- NA_real_
+           GND.pvalue <- NA_real_
+       }
+       else {
+           GND.chisq <- GND.result["chi2gw"]
+           GND.pvalue <- GND.result["pvalgw"]
+       }
+       tibble(GND_chisq = GND.chisq, GND_pvalue = GND.pvalue)
+   }
+
+14. Функция: GND.calib
+   Файл: GND_calibration.R
+   Код:
+   function (pred, tvar, out, cens.t, groups, adm.cens, verbose = 0) 
+   {
+       tvar.t = ifelse(tvar > adm.cens, adm.cens, tvar)
+       out.t = ifelse(tvar > adm.cens, 0, out)
+       datause = data.frame(pred = pred, tvar = tvar.t, out = out.t, 
+           count = 1, cens.t = cens.t, dec = groups)
+       numcat = length(unique(datause$dec))
+       groups = sort(unique(datause$dec))
+       kmtab = matrix(data = unlist(lapply(groups, kmdec, "dec", 
+           datain = datause, adm.cens)), ncol = 5, byrow = TRUE)
+       if (any(kmtab[, 5] == -1)) 
+           stop("Stopped because at least one of the groups contains <2 events.\n      Consider collapsing some groups.")
+       else if (any(kmtab[, 5] == 1)) 
+           warning("At least one of the groups contains < 5 events. GND can become unstable.\n    (see Demler, Paynter, Cook 'Tests of Calibration and Goodness of Fit in \n    the Survival Setting' DOI: 10.1002/sim.6428) \n    Consider collapsing some groups to avoid this problem.")
+       hltab = data.frame(group = kmtab[, 4], totaln = tapply(datause$count, 
+           datause$dec, sum), censn = tapply(datause$cens.t, datause$dec, 
+           sum), numevents = tapply(datause$out, datause$dec, sum), 
+           expected = tapply(datause$pred, datause$dec, sum), kmperc = 1 - 
+               kmtab[, 1], kmvar = kmtab[, 2]^2, kmnrisk = kmtab[, 
+               3], expectedperc = tapply(datause$pred, datause$dec, 
+               mean))
+       hltab$kmnum = hltab$kmperc * hltab$totaln
+       hltab$GND_component = ifelse(test = hltab$kmvar == 0, yes = 0, 
+           no = (hltab$kmperc - hltab$expectedperc)^2/(hltab$kmvar))
+       if (verbose > 0) 
+           print(hltab[c(1, 2, 3, 4, 10, 5, 6, 9, 7, 11)], digits = 4)
+       c(df = numcat - 1, chi2gw = sum(hltab$GND_component), pvalgw = 1 - 
+           pchisq(sum(hltab$GND_component), numcat - 1))
+   }
+
+15. Функция: is_normal
+   Файл: tb1_fun.R
+   Код:
+   function (x) 
+   {
+       shapiro.test(x)$p.value > 0.05
+   }
+
+16. Функция: kmdec
+   Файл: GND_calibration.R
+   Код:
+   function (dec.num, dec.name, datain, adm.cens) 
+   {
+       stopped <- 0
+       data.sub <- datain[datain[, dec.name] == dec.num, ]
+       if (sum(data.sub$out) > 1) {
+           avsurv <- survfit(formula = Surv(tvar, out) ~ 1, data = datain[datain[, 
+               dec.name] == dec.num, ], error = "g")
+           avsurv.est = ifelse(test = min(avsurv$time) <= adm.cens, 
+               yes = avsurv$surv[avsurv$time == max(avsurv$time[avsurv$time <= 
+                   adm.cens])], no = 1)
+           avsurv.stderr <- ifelse(test = min(avsurv$time) <= adm.cens, 
+               yes = avsurv$std.err[avsurv$time == max(avsurv$time[avsurv$time <= 
+                   adm.cens])], no = 0)
+           avsurv.stderr = avsurv.stderr * avsurv.est
+           avsurv.num = ifelse(test = min(avsurv$time) <= adm.cens, 
+               yes = avsurv$n.risk[avsurv$time == max(avsurv$time[avsurv$time <= 
+                   adm.cens])], no = 0)
+       }
+       else {
+           return(c(0, 0, 0, 0, stopped = -1))
+       }
+       if (sum(data.sub$out) < 5) 
+           stopped = 1
+       c(avsurv.est, avsurv.stderr, avsurv.num, dec.num, stopped)
+   }
+
+17. Функция: load_mc_cv
+   Файл: load_mc_cv.R
+   Код:
+   function () 
+   {
+       bind_rows(read_rds("data/mc_cv_results_250.rds"), read_rds("data/mc_cv_results_500.rds"), 
+           read_rds("data/mc_cv_results_750.rds"))
+   }
+
+18. Функция: make_contrasts
+   Файл: make_contrasts.R
+   Код:
+   function (linpred) 
+   {
+       rslt_contrast <- tibble(contrast = character(), estimate = double(), 
+           lower = double(), upper = double(), prob_gt_0 = double())
+       grid <- expand.grid(m1 = names(linpred), m2 = names(linpred), 
+           stringsAsFactors = FALSE) %>% as_tibble()
+       for (i in seq(nrow(grid))) {
+           m1 <- linpred[, grid$m1[i], drop = TRUE]
+           m2 <- linpred[, grid$m2[i], drop = TRUE]
+           rslt_contrast <- rslt_contrast %>% add_row(contrast = paste(grid$m1[i], 
+               grid$m2[i], sep = "_minus_"), estimate = median(m1 - 
+               m2), lower = quantile(m1 - m2, probs = 0.025), upper = quantile(m1 - 
+               m2, probs = 0.975), prob_gt_0 = mean(m1 - m2 > 0))
+       }
+       rslt_contrast
+   }
+
+19. Функция: make_final_features
+   Файл: make_final_features.R
+   Код:
+   function (phts_all, n_trees = 500, n_predictors = 20) 
+   {
+       pre_proc_ftr_selector <- phts_all %>% make_recipe() %>% prep() %>% 
+           juice() %>% select(-ID)
+       ftr_importance <- select_rsf(trn = pre_proc_ftr_selector, 
+           n_predictors = n_predictors, num.trees = n_trees, return_importance = TRUE)
+       ftrs <- pull(ftr_importance, name)
+       ftrs_as_variables <- ftrs %>% str_split("\\.\\.") %>% map_chr(~.x[1]) %>% 
+           unique()
+       list(terms = ftrs, variables = ftrs_as_variables, importance = ftr_importance)
+   }
+
+20. Функция: make_final_partial
+   Файл: make_final_partial.R
+   Код:
+   function (final_model, final_data, final_features) 
+   {
+       map(.x = final_features$variables, .f = ~partial(model = final_model, 
+           data = final_data, variable_name = .x) %>% mutate(tmp = list(prediction[[1]]), 
+           boot_results = map2(tmp, prediction, partial_boot), name = as.character(name), 
+           across(where(is.factor), as.factor)) %>% unnest_wider(boot_results) %>% 
+           select(-prediction, -tmp))
+   }
+
+21. Функция: make_labels
+   Файл: make_labels.R
+   Код:
+   function (colname_variable, colname_label, case = "snake", set_to_na = "") 
+   {
+       variables <- read_sas("data/phts_txpl_ml.sas7bdat") %>% map_chr(attr, 
+           "label") %>% enframe(name = colname_variable, value = colname_label) %>% 
+           mutate(variable = clean_chr(variable)) %>% add_row(variable = "tx_mcsd", 
+           label = "F1T MSCD at Transplant") %>% filter(variable != 
+           "txnomcsd", variable != "lbun_r") %>% mutate(label = str_remove(label, 
+           "^F\\d.|^F0"), label = trimws(label))
+       categories <- c(congenital_hd = "Congenital heart disease", 
+           cardiomyopathy = "Cardiomyopathy", no = "No", yes = "Yes", 
+           other = "Other") %>% enframe(name = "category", value = colname_label)
+       list(variables = variables, categories = categories)
+   }
+
+22. Функция: make_model_final
+   Файл: make_model_final.R
+   Код:
+   function (phts_all) 
+   {
+       model <- fit_orsf(trn = pre_proc_ftr_selector, vars = ftrs)
+       variable_name <- "cpbypass"
+       variable_values <- quantile(pre_proc_ftr_selector[[variable_name]], 
+           probs = seq(0.1, 0.9, by = 0.1))
+       partial <- enframe(variable_values) %>% mutate(variable = variable_name, 
+           .before = 1) %>% mutate(prediction = list(NULL))
+       for (v in seq_along(variable_values)) {
+           trn_pd <- pre_proc_ftr_selector[, ftrs]
+           trn_pd[[variable_name]] <- variable_values[v]
+           partial$prediction[[v]] <- predict(model, newdata = trn_pd, 
+               times = 1)
+       }
+       partial %>% mutate(mean = map_dbl(prediction, ~1 - median(.x)))
+       pre_proc_ftr_selector %>% filter(cpbypass > 224) %>% mutate(status = if_else(status == 
+           1 & time < 1, status, 0), time = if_else(status == 0, 
+           pmin(time, 1), time)) %>% select(time, status) %>% summarize(incidence = sum(status)/sum(time))
+       partial_cats <- phts_all %>% select(all_of(ftrs_as_variables)) %>% 
+           select(where(is.factor)) %>% map(levels) %>% enframe(value = "label") %>% 
+           unnest(cols = label) %>% mutate(variable = paste(name, 
+           label, sep = ".."), .before = label)
+       partial <- pre_proc_interpretable$steps[[4]]$objects %>% 
+           map("breaks") %>% enframe() %>% unnest_wider(value) %>% 
+           mutate(...1 = map_dbl(name, ~min(phts_all[[.x]], na.rm = TRUE)), 
+               ...4 = map_dbl(name, ~max(phts_all[[.x]], na.rm = TRUE)), 
+               bin1 = table_glue("{...1} to <{...2}"), bin2 = table_glue("{...2} to <{...3}"), 
+               bin3 = table_glue("{...3} to <{...4}")) %>% select(name, 
+           starts_with("bin")) %>% pivot_longer(cols = starts_with("bin"), 
+           names_to = "bin", values_to = "label") %>% mutate(variable = glue("{name}..{bin}"), 
+           .before = label) %>% select(-bin) %>% bind_rows(partial_cats) %>% 
+           mutate(values = list(NULL))
+       counter <- 1
+       for (.name in unique(partial$name)) {
+           for (.variable in unique(partial$variable[partial$name == 
+               .name])) {
+               hot_column <- .variable
+               cold_columns <- setdiff(unique(partial$variable[partial$name == 
+                   .name]), .variable)
+               trn_pd <- trn_interpretable
+               trn_pd[, hot_column] <- 1
+               trn_pd[, cold_columns] <- 0
+               partial$values[[counter]] <- as.numeric(1 - predict(model, 
+                   newdata = trn_pd, times = 1))
+               counter <- counter + 1
+           }
+       }
+       boot_median_ratio <- function(numerator, denominator, n_boots) {
+           results <- matrix(0, nrow = n_boots, ncol = length(numerator))
+           for (i in seq(n_boots)) {
+               boot_index <- sample(x = 1:length(numerator), size = length(numerator), 
+                   replace = TRUE)
+               results[i, ] <- map_dbl(.x = numerator, .f = ~median(.x[boot_index])/median(denominator[boot_index]))
+           }
+           tibble(lwr = apply(results, 2, quantile, probs = 0.025), 
+               est = apply(results, 2, quantile, probs = 0.5), upr = apply(results, 
+                   2, quantile, probs = 0.975), )
+       }
+       partial %>% group_by(name) %>% summarize(label = label, boot_vals = boot_median_ratio(numerator = values, 
+           denominator = values[[1]], n_boots = 5000))
+       cph_ftrs <- partial %>% group_by(name) %>% slice(-1) %>% 
+           pull(variable) %>% intersect(names(trn_interpretable))
+       cph <- coxph(Surv(time, status) ~ ., data = trn_interpretable[, 
+           c("time", "status", cph_ftrs)])
+   }
+
+23. Функция: make_partial_cpbypass
+   Файл: make_partial_cpbypass.R
+   Код:
+   function (final_model, final_data) 
+   {
+       variable_values <- quantile(final_data$cpbypass, probs = seq(0.2, 
+           0.8, length.out = 15))
+       partial_data <- .partial(model = final_model, data = final_data, 
+           variable_name = "cpbypass", variable_values = variable_values)
+   }
+
+24. Функция: make_partial_table_data
+   Файл: make_partial_table_data.R
+   Код:
+   function (partial_final, labels) 
+   {
+       label_vec <- deframe(labels$variables)
+       map_dfr(.x = partial_final, .f = .partial_table_data, labels = labels) %>% 
+           mutate(label = recode(variable, !!!label_vec))
+   }
+
+25. Функция: make_partial_table_data_catg
+   Файл: make_partial_table_data.R
+   Код:
+   function (.x, label_data) 
+   {
+       label_vec <- deframe(label_data)
+       output <- .x %>% transmute(variable, value = recode(value, 
+           !!!label_vec), prev = table_glue("{100*est_prev} ({100*lwr_prev}, {100*upr_prev})"), 
+           ratio = table_glue("{est_ratio} ({lwr_ratio}, {upr_ratio})"), 
+           diff = table_glue("{100*est_diff} ({100*lwr_diff}, {100*upr_diff})"))
+       output$ratio[1] <- "1 (Reference)"
+       output$diff[1] <- "0 (Reference)"
+       output
+   }
+
+26. Функция: make_partial_table_data_ctns
+   Файл: make_partial_table_data.R
+   Код:
+   function (.x) 
+   {
+       output <- .x %>% mutate(name = str_replace(name, "\\%", "th percentile")) %>% 
+           transmute(variable, value = table_glue("{name}: {value}"), 
+               prev = table_glue("{100*est_prev} ({100*lwr_prev}, {100*upr_prev})"), 
+               ratio = table_glue("{est_ratio} ({lwr_ratio}, {upr_ratio})"), 
+               diff = table_glue("{100*est_diff} ({100*lwr_diff}, {100*upr_diff})"))
+       output$ratio[1] <- "1 (Reference)"
+       output$diff[1] <- "0 (Reference)"
+       output
+   }
+
+27. Функция: make_recipe
+   Файл: make_recipe.R
+   Код:
+   function (data, dummy_code = TRUE) 
+   {
+       naming_fun <- function(var, lvl, ordinal = FALSE, sep = "..") {
+           dummy_names(var = var, lvl = lvl, ordinal = ordinal, 
+               sep = sep)
+       }
+       rc <- recipe(time + status ~ ., data) %>% update_role(ID, 
+           new_role = "Patient identifier") %>% step_medianimpute(all_numeric(), 
+           -all_outcomes()) %>% step_modeimpute(all_nominal(), -all_outcomes()) %>% 
+           step_nzv(all_predictors(), freq_cut = 1000, unique_cut = 0.025) %>% 
+           step_novel(all_nominal(), -all_outcomes())
+       if (dummy_code) {
+           rc %>% step_dummy(all_nominal(), -all_outcomes(), naming = naming_fun, 
+               one_hot = FALSE)
+       }
+       else {
+           rc
+       }
+   }
+
+28. Функция: make_recipe_interpretable
+   Файл: make_recipe_interpretable.R
+   Код:
+   function (phts_all) 
+   {
+       naming_fun <- function(var, lvl, ordinal = FALSE, sep = "..") {
+           dummy_names(var = var, lvl = lvl, ordinal = ordinal, 
+               sep = sep)
+       }
+       recipe(time + status ~ ., phts_all) %>% step_medianimpute(all_numeric(), 
+           -all_outcomes()) %>% step_modeimpute(all_nominal(), -all_outcomes()) %>% 
+           step_nzv(all_predictors(), freq_cut = 1000, unique_cut = 0.025) %>% 
+           step_discretize(all_numeric(), -all_outcomes(), num_breaks = 3) %>% 
+           step_dummy(all_nominal(), -all_outcomes(), naming = naming_fun, 
+               one_hot = TRUE)
+   }
+
+29. Функция: mc_cv_light
+   Файл: mc_cv_light.R
+   Код:
+   function (phts_all, train_prop = 3/4, ntimes) 
+   {
+       resamples <- mc_cv(data = phts_all, prop = train_prop, times = ntimes, 
+           strata = status)
+       testing_rows <- map(resamples$splits, rsample::complement)
+       write_rds(testing_rows, "data/resamples.rds")
+       testing_rows
+   }
+
+30. Функция: miqr_fun
+   Файл: tabulate_predictor_smry.R
+   Код:
+   function (x, data, na.rm = TRUE) 
+   {
+       .x <- data[[x]]
+       .median <- median(.x, na.rm = na.rm)
+       .upr <- quantile(.x, probs = 3/4, na.rm = na.rm)
+       .lwr <- quantile(.x, probs = 1/4, na.rm = na.rm)
+       table_glue("{.median}\n({.lwr}, {.upr})")
+   }
+
+31. Функция: miss_fun
+   Файл: tabulate_predictor_smry.R
+   Код:
+   function (x, data) 
+   {
+       x_na <- is.na(x)
+       n_miss <- sum(x_na)
+       p_miss <- mean(x_na)
+       table_glue("{n_miss} ({p_miss})")
+   }
+
+32. Функция: mnsd_fun
+   Файл: tabulate_predictor_smry.R
+   Код:
+   function (x, data, na.rm = TRUE) 
+   {
+       .x <- data[[x]]
+       .mean <- mean(.x, na.rm = na.rm)
+       .sd <- sd(.x, na.rm = na.rm)
+       table_glue("{.mean}\n({.sd})")
+   }
+
+33. Функция: partial
+   Файл: partial.R
+   Код:
+   function (model, data, variable_name, variable_values = NULL) 
+   {
+       variable <- data[[variable_name]]
+       variable_unique_count <- length(unique(na.omit(variable)))
+       if (variable_unique_count <= 3) 
+           return(partial_catg(model, data, variable_name, variable_values))
+       if (is.numeric(variable)) 
+           return(partial_ctns(model, data, variable_name, variable_values))
+       if (is.factor(variable) || is.character(variable)) 
+           return(partial_catg(model, data, variable_name, variable_values))
+       stop("unsupported type", call. = FALSE)
+   }
+
+34. Функция: partial_boot
+   Файл: partial_boot.R
+   Код:
+   function (reference, exposure, n_boots = 1000) 
+   {
+       df_partial <- tibble(reference = reference, exposure = exposure)
+       boots <- bootstraps(df_partial, m = n_boots) %>% mutate(result = map(.x = splits, 
+           .f = ~{
+               boot_data <- training(.x)
+               refr <- median(boot_data$reference)
+               expo <- median(boot_data$exposure)
+               list(prev = expo, ratio = expo/refr, diff = expo - 
+                   refr)
+           })) %>% unnest_wider(result)
+       refr <- median(df_partial$reference)
+       expo <- median(df_partial$exposure)
+       estimate <- c(prev = expo, ratio = expo/refr, diff = expo - 
+           refr)
+       bootBCa(estimate = estimate, estimates = as.matrix(boots[, 
+           c("prev", "ratio", "diff")]), n = length(exposure)) %>% 
+           t() %>% cbind(est = estimate) %>% as_tibble(rownames = "measure") %>% 
+           rename(lwr = `2.5%`, upr = `97.5%`) %>% pivot_wider(names_from = measure, 
+           values_from = c(lwr, upr, est))
+   }
+
+35. Функция: partial_catg
+   Файл: partial_catg.R
+   Код:
+   function (model, data, variable_name, variable_values = NULL) 
+   {
+       if (is.null(variable_values)) {
+           variable_values <- sort(unique(data[[variable_name]]))
+       }
+       .partial(model, data, variable_name, variable_values)
+   }
+
+36. Функция: partial_ctns
+   Файл: partial_ctns.R
+   Код:
+   function (model, data, variable_name, variable_values = NULL) 
+   {
+       if (is.null(variable_values)) {
+           variable_values <- quantile(data[[variable_name]], probs = c(0.25, 
+               0.5, 0.75))
+       }
+       .partial(model, data, variable_name, variable_values)
+   }
+
+37. Функция: plot_pred_variable_smry
+   Файл: plot_pred_variable_smry.R
+   Код:
+   function (data_gg, n_cats, colors, lab_color = "", legend_position = c(0.2, 
+       0.8), legend_direction = "vertical") 
+   {
+       bind_on <- data_gg %>% filter(time <= 1) %>% group_by(name) %>% 
+           summarize(time = 1, est = max(est), ci_lwr = max(ci_lwr), 
+               ci_upr = max(ci_upr))
+       ggplot(bind_rows(data_gg, bind_on)) + aes(x = time, y = est, 
+           col = name, fill = name, ymin = ci_lwr, ymax = ci_upr) + 
+           geom_line(size = 1) + geom_ribbon(alpha = 0.1, linetype = 3) + 
+           theme_bw() + theme(panel.grid = element_blank(), legend.position = legend_position, 
+           legend.direction = legend_direction, text = element_text(size = 9), 
+           axis.text = element_text(size = 9), legend.text = element_text(size = 9), 
+           legend.key.size = unit(2/3, "cm")) + labs(y = "Cumulative incidence of graft loss or mortality", 
+           x = "Time since transplant, months", fill = lab_color, 
+           color = lab_color) + scale_y_continuous(labels = scales::percent, 
+           limits = c(0, 1/2)) + scale_x_continuous(breaks = seq(0, 
+           1, length.out = 13), labels = seq(0, 12), limits = c(0, 
+           1)) + coord_cartesian(xlim = c(0, 1)) + scale_color_manual(values = colors[1:n_cats]) + 
+           scale_fill_manual(values = colors[1:n_cats])
+   }
+
+38. Функция: ranger_predictrisk
+   Файл: ranger_predictrisk.R
+   Код:
+   function (object, newdata, times, ...) 
+   {
+       ptemp <- ranger:::predict.ranger(object, data = newdata, 
+           importance = "none")$survival
+       pos <- prodlim::sindex(jump.times = object$unique.death.times, 
+           eval.times = times)
+       p <- cbind(1, ptemp)[, pos + 1, drop = FALSE]
+       if (NROW(p) != NROW(newdata) || NCOL(p) != length(times)) 
+           stop(paste("\nPrediction matrix has wrong dimensions:\nRequested newdata x times: ", 
+               NROW(newdata), " x ", length(times), "\nProvided prediction matrix: ", 
+               NROW(p), " x ", NCOL(p), "\n\n", sep = ""))
+       1 - p
+   }
+
+39. Функция: safe_coxph
+   Файл: safe_coxph.R
+   Код:
+   function (data, time = "time", status = "status", x = TRUE) 
+   {
+       formula <- as.formula(glue("Surv({time}, {status}) ~ ."))
+       cph_model <- coxph(formula = formula, data = data, x = x)
+       data_refit <- data
+       while (any(is.na(cph_model$coefficients))) {
+           na_index <- which(is.na(cph_model$coefficients))
+           to_drop <- names(cph_model$coefficients)[na_index]
+           data_refit[, to_drop] <- NULL
+           cph_model <- coxph(formula = formula, data = data_refit, 
+               x = x)
+       }
+       cph_model
+   }
+
+40. Функция: select_cph
+   Файл: select_cph.R
+   Код:
+   function (trn, n_predictors) 
+   {
+       step_init <- coxph(Surv(time, status) ~ 1, data = trn, x = TRUE)
+       step_scope_rhs <- trn %>% select(-time, -status) %>% names() %>% 
+           glue_collapse(sep = " + ")
+       step_scope <- as.formula(glue("Surv(time, status) ~ {step_scope_rhs}"))
+       step_fit <- stepAIC(object = step_init, scope = step_scope, 
+           direction = "both", steps = n_predictors, trace = 0)
+       names(step_fit$coefficients)
+   }
+
+41. Функция: select_rsf
+   Файл: select_rsf.R
+   Код:
+   function (trn, n_predictors, num.trees = 250, importance = "permutation", 
+       min.node.size = 20, splitrule = "extratrees", num.random.splits = 10, 
+       return_importance = FALSE) 
+   {
+       model <- ranger(formula = Surv(time, status) ~ ., data = trn, 
+           num.trees = num.trees, importance = importance, min.node.size = min.node.size, 
+           splitrule = splitrule, num.random.splits = num.random.splits)
+       ftr_importance <- enframe(model$variable.importance) %>% 
+           arrange(desc(value)) %>% slice(1:n_predictors)
+       if (return_importance) 
+           return(ftr_importance)
+       pull(ftr_importance, name)
+   }
+
+42. Функция: select_xgb
+   Файл: select_xgb.R
+   Код:
+   function (trn, n_predictors, n_rounds = 250, eta = 0.01, max_depth = 3, 
+       gamma = 1/2, min_child_weight = 2, subsample = 1/2, colsample_bynode = 1/2, 
+       objective = "survival:cox", eval_metric = "cox-nloglik") 
+   {
+       trn_x <- as.matrix(select(trn, -c(time, status)))
+       trn_y <- as.matrix(select(trn, c(time, status)))
+       xgb_label <- trn_y[, 1]
+       censored <- trn_y[, 2] == 0
+       xgb_label[censored] <- xgb_label[censored] * (-1)
+       params <- list(eta = eta, max_depth = max_depth, gamma = gamma, 
+           min_child_weight = min_child_weight, subsample = subsample, 
+           colsample_bynode = colsample_bynode, objective = objective, 
+           eval_metric = eval_metric)
+       sgb_trn <- sgb_data(data = trn_x, label = xgb_label)
+       sgb_fit(sgb_df = sgb_trn, nrounds = n_rounds, verbose = 0, 
+           params = params) %>% use_series("fit") %>% xgb.importance(model = .) %>% 
+           slice(1:n_predictors) %>% pull(Feature)
+   }
+
+43. Функция: tabulate_characteristics
+   Файл: tabulate_characteristics.R
+   Код:
+   function (phts_all, labels, extra_variables) 
+   {
+       tb1_vars <- c("age_txpl", "sex", "race", "hisp") %>% union(extra_variables)
+       labels$variables$label[labels$variables$variable == "sex"] <- "F0 Male recipient"
+       tbl_data_raw <- phts_all %>% mutate(txpl_year = cut(x = txpl_year, 
+           breaks = c(0, 2013, 2016, 2019), labels = c("Before 2014", 
+               "2014 through 2016", "After 2017"))) %>% select(txpl_year, 
+           !!!tb1_vars) %>% mutate(across(where(is.character), as.factor))
+       overall <- tbl_data_raw %>% select(-txpl_year) %>% map_dfr(tb1_fun, 
+           .id = "variable") %>% mutate(group = table_glue("Overall\n(N = {nrow(tbl_data_raw)})"))
+       by_year_counts <- count(tbl_data_raw, txpl_year) %>% rename(group = txpl_year)
+       by_year <- tbl_data_raw %>% split(.$txpl_year) %>% map_dfr(~select(.x, 
+           -txpl_year) %>% map_dfr(tb1_fun, .id = "variable"), .id = "group") %>% 
+           left_join(by_year_counts) %>% mutate(group = table_glue("{group}\n(N = {n})")) %>% 
+           select(-n)
+       tbl_data <- bind_rows(overall, by_year)
+       tbl_data_wide <- tbl_data %>% pivot_wider(names_from = group, 
+           values_from = smry_value)
+       tbl_inline <- tbl_data %>% mutate(group = str_replace_all(group, 
+           " ", "_"), group = str_replace(group, "(^\\d)", "From_\\1")) %>% 
+           as_inline(tbl_variables = c("variable", "group", "level"), 
+               tbl_values = c("smry_value"))
+       tbl_data_clean <- tbl_data_wide %>% add_count(variable) %>% 
+           mutate(variable_label = recode(variable, !!!deframe(labels$variables)), 
+               level = if_else(n <= 2, variable_label, level), variable_label = if_else(variable_label == 
+                   level, NA_character_, variable_label)) %>% split(.$n == 
+           2)
+       tbl_data_clean$`TRUE` %<>% group_by(variable) %>% slice(2) %>% 
+           ungroup()
+       tbl_data_clean %<>% bind_rows() %>% mutate(variable = factor(variable, 
+           levels = tb1_vars)) %>% arrange(variable) %>% select(-variable, 
+           -n)
+       tbl_grouped_data <- tbl_data_clean %>% as_grouped_data(groups = "variable_label") %>% 
+           remove_empty("rows")
+       padding_index <- which(is.na(tbl_grouped_data$variable_label) & 
+           tbl_grouped_data$level %in% tbl_data$level)
+       tbl_flex <- tbl_grouped_data %>% mutate(level = recode(level, 
+           !!!deframe(labels$categories)), level = Hmisc::capitalize(level)) %>% 
+           as_flextable(hide_grouplabel = TRUE) %>% add_header_row(values = c("Variable", 
+           "Overall", "Transplant year"), colwidths = c(1, 1, 3)) %>% 
+           theme_box() %>% align(align = "center", part = "all") %>% 
+           align(j = 1, align = "left", part = "body") %>% padding(i = padding_index, 
+           j = 1, padding.left = 15) %>% width(j = 1, width = 2.5) %>% 
+           width(j = c(2:5), width = 1.25) %>% set_header_labels(level = "Variable") %>% 
+           merge_v(j = c(1, 2), part = "header") %>% font(fontname = "Times New Roman", 
+           part = "all") %>% fontsize(size = 12, part = "all") %>% 
+           footnote(i = 1, j = 1, value = as_paragraph("Table values are median (25th percentile, 75th percentile)", 
+               " and percent for continuous and categorical", " variables, respectively."))
+       list(table = tbl_flex, inline = tbl_inline)
+   }
+
+44. Функция: tabulate_missingness
+   Файл: tabulate_missingness.R
+   Код:
+   function (final_recipe, phts_all, final_features, labels) 
+   {
+       data_miss_var <- phts_all %>% select(all_of(final_features$variables)) %>% 
+           miss_var_summary() %>% mutate(pct_miss = table_value(pct_miss))
+       impute_medians <- final_recipe$steps[[1]]$medians %>% enframe() %>% 
+           mutate(impute_with = table_value(as.numeric(value))) %>% 
+           filter(name %in% final_features$variables) %>% select(-value)
+       impute_modes <- final_recipe$steps[[2]]$modes %>% enframe() %>% 
+           mutate(impute_with = as.character(value)) %>% filter(name %in% 
+           final_features$variables) %>% select(-value)
+       data_impute_values <- bind_rows(impute_medians, impute_modes) %>% 
+           rename(variable = name, impute_miss = impute_with)
+       data_table <- data_miss_var %>% left_join(data_impute_values) %>% 
+           left_join(labels$variables)
+       inline <- data_table %>% as_inline(tbl_variables = c("variable"), 
+           tbl_values = c("n_miss", "pct_miss", "impute_miss"))
+       ft <- data_table %>% select(label, ends_with("miss")) %>% 
+           flextable() %>% set_header_labels(label = "Predictor variable", 
+           n_miss = "Number", pct_miss = "Percent", impute_miss = "Imputed to") %>% 
+           add_header_row(values = c("Predictor variable", "Missing values"), 
+               colwidths = c(1, 3)) %>% theme_box() %>% merge_v(j = 1, 
+           part = "header") %>% align(align = "center", part = "all") %>% 
+           align(align = "left", part = "all", j = 1) %>% width(j = c(2, 
+           3, 4), width = 1.5) %>% width(j = 1, width = 2.5)
+       list(inline = inline, table = ft)
+   }
+
+45. Функция: tabulate_partial_table_data
+   Файл: tabulate_partial_table_data.R
+   Код:
+   function (partial_table_data, features) 
+   {
+       ft <- partial_table_data %>% filter(variable %in% features) %>% 
+           select(-variable) %>% as_grouped_data(groups = "label") %>% 
+           as_flextable(hide_grouplabel = TRUE) %>% add_header_row(values = c("", 
+           "1-year predicted risk for graft loss or mortality"), 
+           colwidths = c(1, 3)) %>% set_header_labels(value = "Characteristic", 
+           prev = "Risk (95% CI)", ratio = "Ratio (95% CI)", diff = "Difference (95% CI)") %>% 
+           theme_box() %>% width(width = 1.5) %>% width(j = 1, width = 2) %>% 
+           align(align = "center", part = "all") %>% align(j = 1, 
+           align = "left") %>% font(fontname = "Times New Roman", 
+           part = "all") %>% fontsize(size = 12, part = "all")
+       inline <- partial_table_data %>% select(-label) %>% mutate(value = str_replace(value, 
+           "(^[0-9])", "p\\1"), value = str_remove(value, " percentile"), 
+           value = str_replace_all(value, " ", "_"), value = str_remove_all(value, 
+               "\\:_([0-9]+)$"), value = str_remove_all(value, "\\:_([0-9]+\\.[0-9]+)$"), 
+           value = str_remove(value, "th$")) %>% as_inline(tbl_variables = c("variable", 
+           "value"), tbl_values = c("prev", "ratio", "diff"))
+       list(table = ft, inline = inline)
+   }
+
+46. Функция: tabulate_predictor_smry
+   Файл: tabulate_predictor_smry.R
+   Код:
+   function (phts_all, labels) 
+   {
+       tbl_data <- phts_all %>% select(-ID, -starts_with("rrace"), 
+           -time, -status) %>% map_chr(class) %>% enframe(name = "variable", 
+           value = "type") %>% mutate(type = recode(type, integer = "Continuous", 
+           numeric = "Continuous", factor = "Categorical", character = "Categorical")) %>% 
+           left_join(labels$variables) %>% mutate(label = str_remove(label, 
+           "F\\d ")) %>% split(.$type) %>% map(select, -type)
+       ft_catg <- tbl_data$Categorical %>% mutate(smry = map_chr(variable, 
+           catg_fun, data = phts_all)) %>% flextable(col_keys = c("label", 
+           "smry")) %>% theme_box() %>% set_header_labels(label = "Categorical predictor variable", 
+           smry = "Count (percent)") %>% width(j = "smry", width = 2.5) %>% 
+           width(j = "label", width = 3)
+       ft_ctns <- tbl_data$Continuous %>% mutate(smry_msd = map_chr(variable, 
+           mnsd_fun, data = phts_all), smry_mqr = map_chr(variable, 
+           miqr_fun, data = phts_all)) %>% flextable(col_keys = c("label", 
+           "smry_msd", "smry_mqr")) %>% theme_box() %>% set_header_labels(label = "Categorical predictor variable", 
+           smry_msd = "Mean\n(standard deviation)", smry_mqr = "Median\n(25th, 75th percentile)") %>% 
+           width(j = "label", width = 2) %>% width(j = c("smry_msd", 
+           "smry_mqr"), width = 2) %>% align(j = c("smry_msd", "smry_mqr"), 
+           align = "center", part = "all")
+       list(continuous = ft_ctns, categorical = ft_catg)
+   }
+
+47. Функция: tb1_fun
+   Файл: tb1_fun.R
+   Код:
+   function (x) 
+   {
+       if (is.factor(x)) 
+           return(as.data.frame(100 * table(x)/sum(table(x))) %>% 
+               set_names("level", "smry_value") %>% as_tibble() %>% 
+               mutate(smry_value = table_glue("{smry_value}%")))
+       if (is_normal(x)) {
+           return(tibble(level = NA_character_, smry_value = table_glue("{mean(x, na.rm=T)} ({sd(x, na.rm=T)})")))
+       }
+       else {
+           lwr <- quantile(x, probs = 0.25, na.rm = TRUE)
+           upr <- quantile(x, probs = 0.75, na.rm = TRUE)
+           return(tibble(level = NA_character_, smry_value = table_glue("{median(x, na.rm=T)} ({lwr}, {upr})")))
+       }
+   }
+
+48. Функция: visualize_cpbypass
+   Файл: visualize_cpbypass.R
+   Код:
+   function (phts_all) 
+   {
+       breaks <- c(0, 180, 500)
+       data_cpbypass <- phts_all %>% mutate(cpbypass = cut(cpbypass, 
+           breaks = breaks, include.lowest = T, labels = c("< 3 hours", 
+               "3+ hours"))) %>% select(time, status, cpbypass)
+       incidence <- cuminc(ftime = data_cpbypass$time, fstatus = data_cpbypass$status, 
+           group = data_cpbypass$cpbypass, cencode = 0)
+       data_gg <- incidence[-length(incidence)] %>% map_dfr(~as.data.frame(.x[c("time", 
+           "est", "var")]), .id = "name") %>% mutate(name = str_remove(name, 
+           " \\d$"), ci_lwr = est + sqrt(var) * qnorm(0.025), ci_upr = est + 
+           sqrt(var) * qnorm(0.975), name = fct_reorder2(name, .x = time, 
+           .y = est))
+       n_cats <- length(unique(data_gg$name))
+       colors <- c("purple", "orange", "grey")
+       plot_pred_variable_smry(data_gg, n_cats, colors, legend_position = c(0.3, 
+           0.8), lab_color = "Cardiopulmonary bypass time")
+   }
+
+49. Функция: visualize_final_features
+   Файл: visualize_final_features.R
+   Код:
+   function (fig_prim_dx, fig_cpbypass, fig_txecmo, fig_hxsurg) 
+   {
+       (fig_prim_dx + fig_cpbypass)/(fig_txecmo + fig_hxsurg)
+   }
+
+50. Функция: visualize_hxsurg
+   Файл: visualize_hxsurg.R
+   Код:
+   function (phts_all) 
+   {
+       incidence <- cuminc(ftime = phts_all$time, fstatus = phts_all$status, 
+           group = phts_all$hxsurg, cencode = 0)
+       data_gg <- incidence[-length(incidence)] %>% map_dfr(~as.data.frame(.x[c("time", 
+           "est", "var")]), .id = "name") %>% mutate(name = str_remove(name, 
+           " \\d$"), ci_lwr = est + sqrt(var) * qnorm(0.025), ci_upr = est + 
+           sqrt(var) * qnorm(0.975), name = fct_reorder2(name, .x = time, 
+           .y = est))
+       n_cats <- length(unique(data_gg$name))
+       colors <- c("purple", "orange", "grey")
+       plot_pred_variable_smry(data_gg, n_cats, colors, lab_color = "Surgeries prior\nto listing", 
+           legend_position = c(0.15, 0.75), legend_direction = "vertical")
+   }
+
+51. Функция: visualize_mc_cv
+   Файл: visualize_mc_cv.R
+   Код:
+   function (mc_cv) 
+   {
+       ggdat <- mc_cv %>% mutate(model = recode(model, rsf = "Standard random\nsurvival forest", 
+           orsf = "Oblique random\nsurvival forest", xgb = "Gradient\nboosting", 
+           cph = "Proportional\nhazards"), ftr_selector = recode(ftr_selector, 
+           rsf = "Predictors selected by permutation importance", 
+           xgb = "Predictors selected by contribution importance", 
+           cph = "Predictors selected by stepwise importance"), 
+           ) %>% pivot_longer(cols = AUC:GND.pvalue) %>% group_by(n_predictors, 
+           ftr_selector, model, name) %>% summarize(across(.cols = value, 
+           .fns = list(est = ~median(.x, na.rm = T), lwr = ~quantile(.x, 
+               probs = 0.25, na.rm = T), upr = ~quantile(.x, probs = 0.75, 
+               na.rm = T)))) %>% ungroup() %>% filter(name %in% 
+           c("AUC", "GND.pvalue")) %>% mutate(model = fct_relevel(model, 
+           "Oblique random\nsurvival forest", "Standard random\nsurvival forest", 
+           "Gradient\nboosting", "Proportional\nhazards"))
+       gg_objects <- split(ggdat, f = ggdat$name) %>% map(~ggplot(.x) + 
+           aes(x = n_predictors, y = value_est, color = model) + 
+           geom_vline(xintercept = 20, linetype = 2, color = "black") + 
+           geom_line() + geom_point() + facet_wrap(~ftr_selector, 
+           ncol = 1) + theme_bw() + theme(text = element_text(size = 12), 
+           panel.grid = element_blank()) + labs(x = "Number of predictor variables used in prediction model", 
+           color = "Prediction model\ndeveloped using") + scale_color_manual(values = c("purple", 
+           "forestgreen", "orange", "grey")) + scale_x_sqrt(breaks = c(5, 
+           10, 15, 20, 35, 50, 75)))
+       gg_objects$AUC <- gg_objects$AUC + labs(y = "Area underneath ROC curve")
+       gg_objects$GND.pvalue <- gg_objects$GND.pvalue + labs(y = "P-value for miscalibration")
+       gg_objects
+   }
+
+52. Функция: visualize_mc_cv_inference
+   Файл: visualize_mc_cv_inference.R
+   Код:
+   function (mc_cv, ftr_method = "rsf", n_pred = 20) 
+   {
+       mc_cv_inference_data <- mc_cv %>% filter(n_predictors == 
+           n_pred, ftr_selector == ftr_method)
+       model_auc = stan_lmer(formula = AUC ~ model + (1 | resample_iteration), 
+           data = mc_cv_inference_data, iter = 4000)
+       model_gnd <- stan_lmer(formula = GND.pvalue ~ model + (1 | 
+           resample_iteration), data = mc_cv_inference_data, iter = 4000)
+       newdata = tibble(model = unique(mc_cv_inference_data$model))
+       .colnames <- unique(newdata$model)
+       linpred_auc <- posterior_predict(object = model_auc, re.form = NA, 
+           newdata = newdata) %>% set_colnames(.colnames) %>% as_tibble() %>% 
+           mutate_all(as.numeric)
+       linpred_gnd <- posterior_predict(object = model_gnd, re.form = NA, 
+           newdata = newdata) %>% set_colnames(.colnames) %>% as_tibble() %>% 
+           mutate_all(as.numeric)
+       linpreds <- bind_rows(auc = linpred_auc, gnd = linpred_gnd, 
+           .id = "metric") %>% pivot_longer(cols = -metric, names_to = "model") %>% 
+           group_by(metric, model) %>% summarize(estimate = median(value)) %>% 
+           rename(ref = model) %>% mutate(exp = ref, label = if_else(metric == 
+           "auc", table_glue("AUC: {100*estimate}"), table_glue("P: {estimate}")))
+       contrasts <- bind_rows(auc = make_contrasts(linpred_auc), 
+           gnd = make_contrasts(linpred_gnd), .id = "metric") %>% 
+           separate(contrast, into = c("ref", "exp"), sep = "_minus_") %>% 
+           mutate(ref = factor(ref, levels = c("orsf", "xgb", "rsf", 
+               "cph")), exp = factor(exp, levels = c("orsf", "xgb", 
+               "rsf", "cph")), ref_nmr = as.numeric(ref), exp_nmr = as.numeric(exp)) %>% 
+           select(-lower, -upper)
+       contrasts_auc <- contrasts %>% filter(metric == "auc", ref_nmr > 
+           exp_nmr) %>% mutate(estimate = estimate * -1, prob_gt_0 = 1 - 
+           prob_gt_0) %>% select(-ends_with("nmr"))
+       contrasts_cal <- contrasts %>% filter(metric == "gnd", ref_nmr < 
+           exp_nmr) %>% select(-ends_with("nmr"))
+       plot_data <- bind_rows(contrasts_auc, contrasts_cal) %>% 
+           mutate(label = if_else(metric == "auc", table_glue("Difference: {100*estimate}\nP({toupper(exp)} > {toupper(ref)}): {prob_gt_0}"), 
+               table_glue("Difference: {estimate}\nP({toupper(ref)} > {toupper(exp)}): {prob_gt_0}")), 
+               prob_gt_0_numeric = prob_gt_0, prob_gt_0 = cut(x = prob_gt_0, 
+                   breaks = c(0, 0.5, 0.75, 0.95, 1), labels = c("0 to 0.50", 
+                     "> 0.50 to 0.75", "> 0.75 to 0.95", "> 0.95")))
+       center_data <- linpreds %>% filter(metric == "auc") %>% mutate(label = toupper(ref))
+       inline_linpreds <- linpreds %>% mutate(estimate = round(estimate, 
+           3)) %>% as_inline(tbl_variables = c("metric", "ref"), 
+           tbl_value = "estimate")
+       inline_plot_data <- plot_data %>% mutate(estimate = round(estimate, 
+           3), prob_gt_0_numeric = round(prob_gt_0_numeric, 3)) %>% 
+           as_inline(tbl_variables = c("metric", "ref", "exp"), 
+               tbl_values = c("estimate", "prob_gt_0_numeric"))
+       inline <- list(plot_center = inline_linpreds, plot_sides = inline_plot_data)
+       fig <- ggplot(plot_data) + aes(x = exp, y = ref, fill = prob_gt_0, 
+           label = label) + geom_tile() + geom_text(size = 3.5) + 
+           geom_text(data = filter(linpreds, metric == "auc"), aes(x = exp, 
+               y = ref, label = label), inherit.aes = FALSE, hjust = 0.9, 
+               vjust = -2.5, size = 3.5) + geom_text(data = filter(linpreds, 
+           metric == "gnd"), aes(x = exp, y = ref, label = label), 
+           inherit.aes = FALSE, hjust = -0.25, vjust = 3.3, size = 3.5) + 
+           geom_text(data = center_data, aes(x = exp, y = ref, label = label), 
+               inherit.aes = FALSE, size = 5) + theme_void() + labs(fill = "Posterior probability") + 
+           theme(text = element_text(size = 12), legend.key.size = unit(1/2, 
+               "in"), legend.position = "top", legend.justification = "center") + 
+           scale_fill_jama(alpha = 1/2)
+       list(inline = inline, figure = fig)
+   }
+
+53. Функция: visualize_prim_dx
+   Файл: visualize_prim_dx.R
+   Код:
+   function (phts_all) 
+   {
+       data_prim_dx <- phts_all %>% mutate(prim_dx = fct_collapse(prim_dx, 
+           `Congenital heart\ndisease or other` = c("congenital_hd", 
+               "other"), Cardiomyopathy = "cardiomyopathy")) %>% 
+           select(time, status, prim_dx)
+       incidence <- cuminc(ftime = data_prim_dx$time, fstatus = data_prim_dx$status, 
+           group = data_prim_dx$prim_dx, cencode = 0)
+       data_gg <- incidence[-length(incidence)] %>% map_dfr(~as.data.frame(.x[c("time", 
+           "est", "var")]), .id = "name") %>% mutate(name = str_remove(name, 
+           " \\d$"), ci_lwr = est + sqrt(var) * qnorm(0.025), ci_upr = est + 
+           sqrt(var) * qnorm(0.975), name = fct_reorder2(name, .x = time, 
+           .y = est))
+       n_cats <- length(unique(data_gg$name))
+       colors <- c("purple", "orange", "grey")
+       plot_pred_variable_smry(data_gg, n_cats, colors, lab_color = "Primary diagnosis")
+   }
+
+54. Функция: visualize_txecmo
+   Файл: visualize_txecmo.R
+   Код:
+   function (phts_all) 
+   {
+       incidence <- cuminc(ftime = phts_all$time, fstatus = phts_all$status, 
+           group = phts_all$txecmo, cencode = 0)
+       data_gg <- incidence[-length(incidence)] %>% map_dfr(~as.data.frame(.x[c("time", 
+           "est", "var")]), .id = "name") %>% mutate(name = str_remove(name, 
+           " \\d$"), ci_lwr = est + sqrt(var) * qnorm(0.025), ci_upr = est + 
+           sqrt(var) * qnorm(0.975), name = fct_reorder2(name, .x = time, 
+           .y = est))
+       n_cats <- length(unique(data_gg$name))
+       colors <- c("purple", "orange", "grey")
+       plot_pred_variable_smry(data_gg, n_cats, colors, lab_color = "ECMO at transplant")
+   }
+
+55. Функция: xgb_fitness
+   Файл: xgb_fitness.R
+   Код:
+   function (input_string, trn_x, trn_label, folds, predict_horizon) 
+   {
+       params <- list(eta = as.numeric(input_string[1]), max_depth = round(as.numeric(input_string[2])), 
+           gamma = as.numeric(input_string[3]), min_child_weight = as.numeric(input_string[4]), 
+           subsample = as.numeric(input_string[5]), colsample_bynode = as.numeric(input_string[6]), 
+           objective = "survival:cox", eval_metric = "cox-nloglik")
+       n_pred <- round(as.numeric(input_string[7]))
+       n_rounds <- round(as.numeric(input_string[8]))
+       auc_vals <- rep(NA_real_, length(folds))
+       for (f in seq_along(folds)) {
+           test_index <- folds[[f]]
+           sgb_trn_init <- sgb_data(data = trn_x[-test_index, ], 
+               label = trn_label[-test_index])
+           predictors <- sgb_fit(sgb_df = sgb_trn_init, nrounds = n_rounds, 
+               verbose = 0, params = params) %>% use_series("fit") %>% 
+               xgb.importance(model = .) %>% slice(1:n_pred) %>% 
+               pull(Feature)
+           sgb_trn_rdcd <- sgb_data(data = trn_x[-test_index, predictors], 
+               label = trn_label[-test_index])
+           fit <- sgb_fit(sgb_df = sgb_trn_rdcd, nrounds = n_rounds, 
+               verbose = 0, params = params)
+           sgb_tst_rdcd <- sgb_data(data = trn_x[test_index, predictors], 
+               label = trn_label[test_index])
+           predictions <- list(1 - predict(fit, new_data = sgb_tst_rdcd, 
+               eval_times = predict_horizon))
+           score_data <- tibble(time = abs(trn_label[test_index]), 
+               status = as.numeric(trn_label[test_index] > 0))
+           evaluation <- Score(object = predictions, formula = Surv(time, 
+               status) ~ 1, data = score_data, times = predict_horizon, 
+               se.fit = FALSE)
+           auc_vals[f] <- evaluation$AUC$score$AUC
+       }
+       mean(auc_vals)
+   }
+
+56. Функция: xgb_folds
+   Файл: xgb_folds.R
+   Код:
+   function (data, nfolds) 
+   {
+       if (nrow(data) < nfolds) 
+           stop("nfolds must be >= number of rows in data")
+       rsamp_folds <- rsample::vfold_cv(data, v = nfolds, strata = strata)
+       purrr::map(rsamp_folds$splits, rsample::complement)
+   }
+

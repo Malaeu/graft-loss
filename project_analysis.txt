@@ -1,0 +1,328 @@
+Структура проекта:
+_drake.R
+doc/jacc.csl
+doc/old_drafts/2021-01-28_predicting_graft_loss.docx
+doc/old_drafts/2021-01-29_predicting_graft_loss.docx
+doc/old_drafts/2021-03-16_predicting_graft_loss.docx
+doc/predicting_graft_loss.docx
+doc/predicting_graft_loss.Rmd
+doc/refs.bib
+doc/style_manuscript_times_new_roman.docx
+graft loss.Rproj
+loaded_functions.txt
+packages.R
+project_analysis.txt
+R/capitalize.R
+R/clean_chr.R
+R/clean_phts.R
+R/cmp_incidence.R
+R/fit_cph.R
+R/fit_evaluation.R
+R/fit_final_orsf.R
+R/fit_orsf.R
+R/fit_rsf.R
+R/fit_step.R
+R/fit_xgb.R
+R/GND_calibration.R
+R/load_mc_cv.R
+R/make_contrasts.R
+R/make_final_features.R
+R/make_final_partial.R
+R/make_labels.R
+R/make_model_final.R
+R/make_partial_cpbypass.R
+R/make_partial_table_data.R
+R/make_recipe_interpretable.R
+R/make_recipe.R
+R/mc_cv_light.R
+R/partial_boot.R
+R/partial_catg.R
+R/partial_ctns.R
+R/partial.R
+R/plan.R
+R/plot_pred_variable_smry.R
+R/ranger_predictrisk.R
+R/safe_coxph.R
+R/select_cph.R
+R/select_rsf.R
+R/select_xgb.R
+R/tabulate_characteristics.R
+R/tabulate_missingness.R
+R/tabulate_partial_table_data.R
+R/tabulate_predictor_smry.R
+R/tb1_fun.R
+R/visualize_cpbypass.R
+R/visualize_final_features.R
+R/visualize_hxsurg.R
+R/visualize_mc_cv_inference.R
+R/visualize_mc_cv.R
+R/visualize_prim_dx.R
+R/visualize_txecmo.R
+R/xgb_fitness.R
+R/xgb_folds.R
+slurm/slurm_clean.R
+slurm/slurm_run.R
+
+
+Главный файл: ./_drake.R
+Содержимое главного файла:
+## Load your packages, e.g. library(drake).
+source("./packages.R")
+
+## Load your R files
+lapply(list.files("./R", full.names = TRUE), source)
+
+## _drake.R must end with a call to drake_config().
+## The arguments to drake_config() are basically the same as those to make().
+drake_config(the_plan,
+             lock_envir = FALSE,
+             seed = 7302016, 
+             prework = {
+               
+               set_flextable_defaults(theme_fun = "theme_box")
+               
+               rspec <- round_spec() %>%
+                 round_using_magnitude(breaks = c(10, 100, Inf),
+                                       digits = c(2, 1, 0))
+               
+               names(rspec) <- paste('table.glue', names(rspec), sep = '.')
+               
+               options(rspec)
+               
+             })
+
+
+Зависимости проекта:
+library(conflicted)
+library(dotenv)
+library(drake)
+library(R.utils)
+library(haven)
+library(janitor)
+library(magrittr)
+library(foreach)
+library(tidyverse)
+library(tidymodels)
+library(embed)
+library(tidyposterior)
+library(ranger)
+library(survival)
+library(rms)
+library(aorsf)
+library(xgboost)
+library(xgboost.surv)
+library(riskRegression)
+library(naniar)
+library(MASS)
+library(Hmisc)
+library(rstanarm)
+library(table.glue)
+library(tibbleOne)
+library(officer)
+library(glue)
+library(flextable)
+library(devEMF)
+library(diagram)
+library(magick)
+library(paletteer)
+library(ggdist)
+library(ggsci)
+library(cmprsk)
+library(patchwork)
+library(base, quietly = TRUE)
+library(methods, quietly = TRUE)
+library(usethis, quietly = TRUE)
+library(devtools, quietly = TRUE)
+library(testthat, quietly = TRUE)
+library(drake, quietly = TRUE)
+library(datasets, quietly = TRUE)
+library(utils, quietly = TRUE)
+library(grDevices, quietly = TRUE)
+library(stats, quietly = TRUE)
+library(conflicted, quietly = TRUE)
+library(dotenv, quietly = TRUE)
+library(haven, quietly = TRUE)
+library(janitor, quietly = TRUE)
+library(magrittr, quietly = TRUE)
+library(foreach, quietly = TRUE)
+library(tibble, quietly = TRUE)
+library(tidyr, quietly = TRUE)
+library(readr, quietly = TRUE)
+library(purrr, quietly = TRUE)
+library(dplyr, quietly = TRUE)
+library(stringr, quietly = TRUE)
+library(forcats, quietly = TRUE)
+library(broom, quietly = TRUE)
+library(scales, quietly = TRUE)
+library(dials, quietly = TRUE)
+library(recipes, quietly = TRUE)
+library(rsample, quietly = TRUE)
+library(survival, quietly = TRUE)
+library(iterators, quietly = TRUE)
+library(xgboost, quietly = TRUE)
+library(xgboost.surv, quietly = TRUE)
+library(ranger, quietly = TRUE)
+library(obliqueRSF, quietly = TRUE)
+library(riskRegression, quietly = TRUE)
+library(MASS, quietly = TRUE)
+library(R.methodsS3, quietly = TRUE)
+library(R.oo, quietly = TRUE)
+library(R.utils, quietly = TRUE)
+library(glue, quietly = TRUE)
+library(Hmisc, quietly = TRUE)
+
+
+Функции в проекте:
+Файл: ./R/clean_chr.R
+   clean_chr
+
+Файл: ./R/clean_phts.R
+   clean_phts
+
+Файл: ./R/cmp_incidence.R
+   cmp_incidence
+
+Файл: ./R/fit_cph.R
+   fit_cph
+
+Файл: ./R/fit_evaluation.R
+   fit_evaluation
+
+Файл: ./R/fit_final_orsf.R
+   fit_final_orsf
+
+Файл: ./R/fit_orsf.R
+   fit_orsf
+
+Файл: ./R/fit_rsf.R
+   fit_rsf
+
+Файл: ./R/fit_step.R
+   fit_step
+
+Файл: ./R/fit_xgb.R
+   fit_xgb
+
+Файл: ./R/GND_calibration.R
+   kmdec
+   GND_test
+
+Файл: ./R/load_mc_cv.R
+   load_mc_cv
+
+Файл: ./R/make_contrasts.R
+   make_contrasts
+
+Файл: ./R/make_final_features.R
+   make_final_features
+
+Файл: ./R/make_final_partial.R
+   make_final_partial
+
+Файл: ./R/make_labels.R
+   make_labels
+
+Файл: ./R/make_model_final.R
+   make_model_final
+
+Файл: ./R/make_partial_cpbypass.R
+   make_partial_cpbypass
+
+Файл: ./R/make_partial_table_data.R
+   make_partial_table_data
+   .partial_table_data
+   make_partial_table_data_catg
+   make_partial_table_data_ctns
+
+Файл: ./R/make_recipe_interpretable.R
+   make_recipe_interpretable
+
+Файл: ./R/make_recipe.R
+   make_recipe
+
+Файл: ./R/mc_cv_light.R
+   mc_cv_light
+
+Файл: ./R/partial_boot.R
+   partial_boot
+
+Файл: ./R/partial_catg.R
+   partial_catg
+
+Файл: ./R/partial_ctns.R
+   partial_ctns
+
+Файл: ./R/partial.R
+   partial
+   .partial
+
+Файл: ./R/plot_pred_variable_smry.R
+   plot_pred_variable_smry
+
+Файл: ./R/safe_coxph.R
+   safe_coxph
+
+Файл: ./R/select_cph.R
+   select_cph
+
+Файл: ./R/select_rsf.R
+   select_rsf
+
+Файл: ./R/select_xgb.R
+   select_xgb
+
+Файл: ./R/tabulate_characteristics.R
+   tabulate_characteristics
+
+Файл: ./R/tabulate_missingness.R
+   tabulate_missingness
+
+Файл: ./R/tabulate_partial_table_data.R
+   tabulate_partial_table_data
+
+Файл: ./R/tabulate_predictor_smry.R
+   tabulate_predictor_smry
+   catg_fun
+   mnsd_fun
+   miqr_fun
+   miss_fun
+
+Файл: ./R/tb1_fun.R
+   tb1_fun
+   is_normal
+
+Файл: ./R/visualize_cpbypass.R
+   visualize_cpbypass
+
+Файл: ./R/visualize_final_features.R
+   visualize_final_features
+
+Файл: ./R/visualize_hxsurg.R
+   visualize_hxsurg
+
+Файл: ./R/visualize_mc_cv_inference.R
+   visualize_mc_cv_inference
+
+Файл: ./R/visualize_mc_cv.R
+   visualize_mc_cv
+
+Файл: ./R/visualize_prim_dx.R
+   visualize_prim_dx
+
+Файл: ./R/visualize_txecmo.R
+   visualize_txecmo
+
+Файл: ./R/xgb_fitness.R
+   xgb_fitness
+
+Файл: ./R/xgb_folds.R
+   xgb_folds
+
+Файл: ./slurm/slurm_run.R
+   .rslurm_func
+
+
+Граф зависимостей файлов:
+
+Граф зависимостей файлов:
+_drake.R -> packages.R
